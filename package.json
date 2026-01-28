@@ -1,0 +1,24 @@
+{
+  "name": "dnopi",
+  "version": "0.1.0",
+  "description": "Daniel's pi coding agent skills, extensions, and configuration",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nicenemo/ai-config.git"
+  },
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-skill"
+  ],
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "license": "MIT"
+}
