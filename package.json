@@ -1,10 +1,10 @@
 {
   "name": "dnopi",
   "version": "0.1.0",
-  "description": "Daniel's pi coding agent skills, extensions, and configuration",
+  "description": "Skills and extensions for pi-coding-agent, Claude Code, Codex CLI",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nicenemo/ai-config.git"
+    "url": "https://github.com/dnouri/ai-config.git"
   },
   "type": "module",
   "keywords": [
