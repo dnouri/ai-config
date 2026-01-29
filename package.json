@@ -13,7 +13,7 @@
     "pi-skill"
   ],
   "pi": {
-    "extensions": ["./extensions"],
+    "extensions": ["./extensions", "!./extensions/pisay.ts"],
     "skills": ["./skills"]
   },
   "peerDependencies": {
