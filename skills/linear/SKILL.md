@@ -1,13 +1,11 @@
 ---
 name: linear
-description: "Manage Linear issues with linearis CLI. List issues, create issues, update status, link GitHub PRs, search."
+description: "Manage Linear issues: Create issues, update issues, search issues. Best when combined with GitHub CLI"
 ---
 
 # Linear Issue Management
 
-Track your work, link PRs to issues, update status as you code. This skill connects your coding workflow (especially `gh` CLI) with Linear issue tracking.
-
-Run `linearis usage` to see all available commands. All output is JSON.
+Track your work, link PRs to issues, update issues as you progress.
 
 ## Installation
 
@@ -36,9 +34,11 @@ If neither exists, guide the user:
    ```
    Or add to shell profile: `export LINEAR_API_TOKEN="lin_api_..."`
 
-## Useful Context
+## Necessary Context
 
-On first use, fetch user context to enable filtering by assignee and team:
+Before you use this skill for anything, run `linearis usage` to get an overview of all available commands. Note that linearis output is always JSON.
+
+On first use, also fetch user context to enable filtering by assignee and team:
 
 ```bash
 curl -s -X POST https://api.linear.app/graphql \
@@ -59,6 +59,44 @@ linearis labels list | jq '.labels[].name'
 
 Keep this context for the session.
 
+## Link PR to Issue
+
+**Always link PRs to Linear issues**: this creates traceability and auto-updates issue status when PRs merge.
+
+Linear's GitHub integration handles this automatically when the issue ID appears in your branch name or PR title. [Setup guide](https://linear.app/docs/github-integration)
+
+### Start With the Issue ID in Your Branch
+
+When you begin work on an issue in a branch, make sure to bake the issue ID into your branch name:
+
+```bash
+# Get the branch name from Linear (includes issue ID)
+linearis issues read ENG-123 | jq -r '.branchName'
+# → feature/eng-123-fix-login-timeout
+
+# Create the branch
+git checkout -b $(linearis issues read ENG-123 | jq -r '.branchName')
+```
+
+### Include the Issue ID When Creating PRs
+
+Reinforce the link by including the issue ID in your PR:
+
+```bash
+# Use magic "Closes" in the PR body
+gh pr create --title "Fix login timeout" --body "Description here...
+
+Closes ENG-123"
+```
+
+### Fallback: Link Retroactively via Comment
+
+Already created a PR without the issue ID? Link it manually:
+
+```bash
+linearis comments create ENG-123 --body "PR: $(gh pr view --json url -q .url)"
+```
+
 ## My Issues
 
 The daily driver. Show issues assigned to the user, filtered by status.
@@ -67,36 +105,19 @@ The daily driver. Show issues assigned to the user, filtered by status.
 # Active work (in progress + todo)
 linearis issues search "" --assignee <user-id> --status "In Progress,Todo"
 
-# Just what's in progress
-linearis issues search "" --assignee <user-id> --status "In Progress"
-
-# Scoped to a team
-linearis issues search "" --assignee <user-id> --status "In Progress,Todo" --team ENG
+# Only in progress, scoped to the ENG team
+linearis issues search "" --assignee <user-id> --status "In Progress" --team ENG
 ```
 
 Present results clearly: issue ID, title, status, team.
-
-## Link PR to Issue
-
-When the user creates a PR with `gh`, link it to the Linear issue. This connects code to tracking.
-
-```bash
-# After: gh pr create ...
-linearis comments create ENG-123 --body "PR: https://github.com/org/repo/pull/456"
-
-# Or dynamically:
-linearis comments create ENG-123 --body "PR: $(gh pr view --json url -q .url)"
-```
-
-Offer this automatically when a PR is created and the branch or context suggests a Linear issue.
 
 ## Create Issue
 
 Quick capture of new work. The `--team` flag is required.
 
 ```bash
-# Simple
-linearis issues create "Fix login timeout" --team ENG -d "Users report session expires"
+# Simple (assigned to yourself)
+linearis issues create "Fix login timeout" --team ENG -a <user-id> -d "Users report session expires"
 
 # With labels and priority (1=urgent, 4=low)
 linearis issues create "Fix login timeout" --team ENG \
@@ -111,51 +132,88 @@ linearis issues create "Refactor auth module" --team ENG \
 linearis issues create "Write auth tests" --team ENG --parent-ticket ENG-123
 ```
 
-Before creating, consider searching to check for duplicates.
+Before creating, search to check for duplicates, and broader context.
 
-## Update Status
+## Track Progress
 
-Track progress as work moves through stages.
+Keep issues in sync with your work. Read issues before writing: never lose information.
 
-```bash
-# Starting work
-linearis issues update ENG-123 --status "In Progress"
+### Check Current State
 
-# PR opened
-linearis issues update ENG-123 --status "In Review"
-
-# Done
-linearis issues update ENG-123 --status "Done"
-```
-
-Combine with PR workflow: when PR merges, offer to mark issue as Done.
-
-## Read Issue
-
-Get full context before starting work: description, comments, relationships.
+Before updating, understand what's there:
 
 ```bash
+# Full issue with description and comments
 linearis issues read ENG-123
 ```
 
 Summarize key information: title, status, assignee, description, recent comments, parent/child issues.
 
-## Search
+### Update Status
 
-Find issues by keyword across the workspace.
+Move issues through workflow stages:
 
 ```bash
-# Broad search (all teams)
-linearis issues search "authentication"
-
-# Scoped to team
-linearis issues search "authentication" --team ENG
-
-# Filter by status
-linearis issues search "bug" --status "In Progress,Todo"
+linearis issues update ENG-123 --status "In Progress"
+linearis issues update ENG-123 --status "In Review"
+linearis issues update ENG-123 --status "Done"
 ```
 
-Note: searching without `--team` searches ALL workspace teams, not just the user's teams.
+### Update Description (Checkboxes, Sections)
+
+To update issues, update progress, checkboxes, assumptions, you must use a sequence of read → modify → write to ensure you don't lose information or details.
+
+Use these three commands in sequence:
+
+```bash
+# Get a fresh view of issue and comments
+linearis issues read ENG-123
+
+# Modify whatever after you read
+linear issues update ENG-123 --description "My new description..."
+```
+
+You can also add updates via commenting:
+
+```bash
+# Progress note
+linearis comments create ENG-123 --body "This issue doesn't make any sense, sorry"
+```
+
+**Use comments when:**
+- Reporting incremental progress
+- Adding investigation notes
+- Linking external resources (PRs, docs, logs)
+
+**Use description updates when:**
+- Checking off task checkboxes
+- Updating acceptance criteria
+- Correcting original assumptions
+
+Combine updates to issue description and adding comments as you see fit.
+
+## Search
+
+Search issues by title and description:
+
+```bash
+# Search by keyword (returns array, not object with .issues)
+linearis issues search "login timeout" --team ENG | jq -r '.[] | "\(.identifier) [\(.state.name)] \(.title)"'
+```
+
+**Fallback if keyword search returns nothing:** List all team issues, then filter locally:
+```bash
+# Step 1: Fetch all team issues to a temp file
+linearis issues search "" --team ENG > /tmp/issues.json
+
+# Step 2: List identifier, title, status
+jq -r '.[] | "\(.identifier) [\(.state.name)] \(.title)"' /tmp/issues.json
+
+# Step 3: Read the specific issue you need
+linearis issues read ENG-123
+```
+
+Note: searching without `--team` searches ALL workspace teams.
 
 ## List Projects
 
@@ -166,14 +224,6 @@ linearis projects list
 ```
 
 Projects can be used with `--project` when creating issues or filtering searches.
-
-## Add Comment
-
-Add context, findings, or updates to an issue.
-
-```bash
-linearis comments create ENG-123 --body "Investigated - root cause is in the session handler"
-```
 
 ## Rules
 
