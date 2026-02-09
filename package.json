@@ -1,6 +1,6 @@
 {
   "name": "dnopi",
-  "version": "2026.2.9",
+  "version": "2026.2.10",
   "description": "Skills and extensions for pi-coding-agent",
   "repository": {
     "type": "git",
@@ -14,7 +14,8 @@
   ],
   "pi": {
     "extensions": ["./extensions"],
-    "skills": ["./skills"]
+    "skills": ["./skills"],
+    "video": "https://github.com/dnouri/ai-config/releases/download/2026.2.9/dnopi-demo.mp4"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
