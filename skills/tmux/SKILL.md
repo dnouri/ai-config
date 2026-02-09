@@ -1,6 +1,6 @@
 ---
 name: tmux
-description: Run dev servers, background tasks, or any long-running process in tmux sessions. Use instead of nohup or & with bash tool.
+description: Use tmux instead of bash tool to run commands that take more than ~30 seconds, like bulk operations, db migrations, dev servers.
 ---
 
 # tmux for Long-Running Processes
