@@ -14,6 +14,7 @@ ln -s ~/dnouri-ai-config/skills/linear ~/.pi/agent/skills/linear
 ln -s ~/dnouri-ai-config/skills/aws-sso ~/.pi/agent/skills/aws-sso
 ln -s ~/dnouri-ai-config/skills/tmux ~/.pi/agent/skills/tmux
 ln -s ~/dnouri-ai-config/skills/slack-latest ~/.pi/agent/skills/slack-latest
+ln -s ~/dnouri-ai-config/skills/improve-agents-md ~/.pi/agent/skills/improve-agents-md
 
 # Claude Code
 ln -s ~/dnouri-ai-config/skills/linear ~/.claude/skills/linear
@@ -43,6 +44,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 | [aws-sso](skills/aws-sso/SKILL.md) | AWS SSO token re-authentication |
 | [tmux](skills/tmux/SKILL.md) | Run long-running processes in tmux sessions |
 | [slack-latest](skills/slack-latest/SKILL.md) | Gather recent Slack messages, read threads, and send replies |
+| [improve-agents-md](skills/improve-agents-md/SKILL.md) | Analyze pi sessions to find recurring issues and fix AGENTS.md (pi-specific) |
 
 ## Extensions (pi only)
 
@@ -57,6 +59,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 - **aws-sso**: [AWS CLI](https://aws.amazon.com/cli/) and [tmux](https://github.com/tmux/tmux)
 - **tmux**: [tmux](https://github.com/tmux/tmux)
 - **slack-latest**: Python 3 (standard library only); browser tokens from a Slack session
+- **improve-agents-md**: Python 3, [jq](https://jqlang.github.io/jq/) (for raw JSONL investigation); pi sessions only
 
 ## License
 
