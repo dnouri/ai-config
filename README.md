@@ -1,38 +1,39 @@
 # dnopi
 
-Skills and extensions for [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), compatible with Claude Code, Codex CLI, and other harnesses.
+5 skills and 2 extensions for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
 ## Installation
 
-Clone and symlink skills to your agent's skills directory:
+Install all 5 skills and 2 extensions:
 
 ```bash
-git clone https://github.com/dnouri/ai-config ~/dnouri-ai-config
-
-# pi-coding-agent
-ln -s ~/dnouri-ai-config/skills/linear ~/.pi/agent/skills/linear
-ln -s ~/dnouri-ai-config/skills/aws-sso ~/.pi/agent/skills/aws-sso
-ln -s ~/dnouri-ai-config/skills/tmux ~/.pi/agent/skills/tmux
-ln -s ~/dnouri-ai-config/skills/slack-latest ~/.pi/agent/skills/slack-latest
-ln -s ~/dnouri-ai-config/skills/improve-agents-md ~/.pi/agent/skills/improve-agents-md
-
-# Claude Code
-ln -s ~/dnouri-ai-config/skills/linear ~/.claude/skills/linear
-ln -s ~/dnouri-ai-config/skills/aws-sso ~/.claude/skills/aws-sso
-ln -s ~/dnouri-ai-config/skills/tmux ~/.claude/skills/tmux
-ln -s ~/dnouri-ai-config/skills/slack-latest ~/.claude/skills/slack-latest
+pi install npm:dnopi
 ```
+
+Or pick what you want via [settings filtering](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/packages.md#package-filtering) in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "packages": [
+    {
+      "source": "npm:dnopi",
+      "extensions": ["extensions/notify.ts"],
+      "skills": ["skills/tmux"]
+    }
+  ]
+}
+```
+
+Arrays support globs and `!exclusions`. Omit a key to load all of that type; use `[]` to load none.
 
 ## AGENTS.md / CLAUDE.md
 
 `AGENTS.md` is the global agent instructions file — the single source of truth for how AI coding agents should behave across all projects. `CLAUDE.md` is a symlink to `AGENTS.md`, so both tools read the same file.
 
-**Where they're loaded from:**
-
 | Tool | Global location | How to install |
 |------|----------------|----------------|
-| **pi** | `~/.pi/agent/AGENTS.md` | `ln -s ~/dnouri-ai-config/AGENTS.md ~/.pi/agent/AGENTS.md` |
-| **Claude Code** | `~/.claude/CLAUDE.md` | `ln -s ~/dnouri-ai-config/CLAUDE.md ~/.claude/CLAUDE.md` |
+| **pi** | `~/.pi/agent/AGENTS.md` | `ln -s <repo>/AGENTS.md ~/.pi/agent/AGENTS.md` |
+| **Claude Code** | `~/.claude/CLAUDE.md` | `ln -s <repo>/CLAUDE.md ~/.claude/CLAUDE.md` |
 
 Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that override or extend the global one. The global file here covers methodology (TDD, pair programming), commit discipline, testing standards, and Python guidelines.
 

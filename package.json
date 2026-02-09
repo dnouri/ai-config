@@ -1,7 +1,7 @@
 {
   "name": "dnopi",
-  "version": "0.1.0",
-  "description": "Skills and extensions for pi-coding-agent, Claude Code, Codex CLI",
+  "version": "2026.2.9",
+  "description": "Skills and extensions for pi-coding-agent",
   "repository": {
     "type": "git",
     "url": "https://github.com/dnouri/ai-config.git"
@@ -13,7 +13,7 @@
     "pi-skill"
   ],
   "pi": {
-    "extensions": ["./extensions", "!./extensions/pisay.ts"],
+    "extensions": ["./extensions"],
     "skills": ["./skills"]
   },
   "peerDependencies": {
