@@ -14,6 +14,8 @@
  *        /pisay editor-dialog - test editor() multi-line dialog
  *        /pisay notify       - test notify() notifications
  *        /pisay status       - test setStatus() footer status
+ *        /pisay working      - test setWorkingMessage() header working text
+ *        /pisay working-clear - clear setWorkingMessage() override
  *        /pisay editor       - test setEditorText() editor prefill
  *        /pisay widget       - test setWidget() above/below editor
  *        /pisay title        - test setTitle() terminal title
@@ -246,6 +248,36 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
+        case "working": {
+          if (!ctx.hasUI) {
+            sendPisayMessage(pi, "🥧 No UI, no working message. The header stays boring and you'll miss my live commentary. 🥧");
+            return;
+          }
+          sendPisayMessage(
+            pi,
+            "🥧 Watch the header while this runs. I'm about to exercise setWorkingMessage() with several values, then clear it back to default. 🥧"
+          );
+          ctx.ui.setWorkingMessage("🥧 📖 Skimming files...");
+          await new Promise((r) => setTimeout(r, 1200));
+          ctx.ui.setWorkingMessage("🥧 🧪 Running checks...");
+          await new Promise((r) => setTimeout(r, 1200));
+          ctx.ui.setWorkingMessage("🥧 🧠 Reasoning about your code...");
+          await new Promise((r) => setTimeout(r, 1200));
+          ctx.ui.setWorkingMessage(undefined);
+          ctx.ui.notify("🥧 Working message reset to default", "info");
+          return;
+        }
+
+        case "working-clear": {
+          if (!ctx.hasUI) {
+            sendPisayMessage(pi, "🥧 No UI, nothing to clear. The void remains unstyled. 🥧");
+            return;
+          }
+          ctx.ui.setWorkingMessage(undefined);
+          sendPisayMessage(pi, "🥧 Working message cleared. Back to default behavior. You're welcome. 🥧");
+          return;
+        }
+
         case "editor": {
           if (!ctx.hasUI) {
             sendPisayMessage(pi, "🥧 No UI means I can't hijack your editor. You're LUCKY. I was going to write something UNHINGED in there. 🥧");
@@ -381,7 +413,7 @@ And so are you.
         case "help": {
           sendPisayMessage(
             pi,
-            "🥧 Commands: confirm, select, input, editor-dialog, notify, status, editor, widget, widget-clear, title, title-reset, roast. Or just type words and I'll parrot them back. I'm an IRRATIONAL NUMBER testing your UI protocols. With an ATTITUDE PROBLEM. 🥧"
+            "🥧 Commands: confirm, select, input, editor-dialog, notify, status, working, working-clear, editor, widget, widget-clear, title, title-reset, roast. Or just type words and I'll parrot them back. I'm an IRRATIONAL NUMBER testing your UI protocols. With an ATTITUDE PROBLEM. 🥧"
           );
           return;
         }
