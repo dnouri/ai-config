@@ -1,10 +1,10 @@
 # dnopi
 
-5 skills and 2 extensions for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+6 skills and 2 extensions for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
 ## Installation
 
-Install all 5 skills and 2 extensions:
+Install all 6 skills and 2 extensions:
 
 ```bash
 pi install npm:dnopi
@@ -46,6 +46,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 | [tmux](skills/tmux/SKILL.md) | Run long-running processes in tmux sessions |
 | [slack-latest](skills/slack-latest/SKILL.md) | Gather recent Slack messages, read threads, and send replies |
 | [improve-agents-md](skills/improve-agents-md/SKILL.md) | Analyze pi sessions to find recurring issues and fix AGENTS.md (pi-specific) |
+| [web-search](skills/web-search/SKILL.md) | Web search and content extraction via Brave/DuckDuckGo (no API keys needed) |
 
 ## Extensions (pi only)
 
@@ -61,6 +62,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 - **tmux**: [tmux](https://github.com/tmux/tmux)
 - **slack-latest**: Python 3 (standard library only); browser tokens from a Slack session
 - **improve-agents-md**: Python 3, [jq](https://jqlang.github.io/jq/) (for raw JSONL investigation); pi sessions only
+- **web-search**: [Node.js](https://nodejs.org/) (runs `npm install` on first use); optionally [`playwright-cli`](https://github.com/microsoft/playwright-cli) for JavaScript-heavy pages — see [setup guide](skills/web-search/references/setup-playwright.md)
 
 ## License
 
