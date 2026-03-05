@@ -1,71 +1,22 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "child_process";
-import { homedir } from "os";
-import { join } from "path";
-import { Readability } from "@mozilla/readability";
-import { JSDOM, VirtualConsole } from "jsdom";
+import { loadConfig } from "./config.js";
+import { runSession } from "./session.js";
+import {
+	parseSearchArgs, formatResults,
+	ENGINES, DEFAULT_ENGINE_ORDER,
+} from "./search.js";
+import {
+	extractReadable, isBrowserErrorUrl,
+	isBrowserErrorContent, formatJsonContent,
+	isExtractableContentType,
+} from "./content.js";
+import { SearchError, formatError } from "./errors.js";
+import {
+	headContentType, downloadToTemp, formatDownloadResult,
+} from "./download.js";
 
-// Suppress JSDOM CSS parsing errors (modern CSS features like :is(), :has(), @layer
-// trigger "Could not parse CSS stylesheet" on every <style> block).
-const quietConsole = new VirtualConsole();
-import TurndownService from "turndown";
-import { gfm } from "turndown-plugin-gfm";
-
-const PW_CONFIG = join(homedir(), ".playwright", "cli.config.json");
-
-const UA =
-	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-
-const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
-td.use(gfm);
-td.addRule("removeEmptyLinks", {
-	filter: (node) => node.nodeName === "A" && !node.textContent?.trim(),
-	replacement: () => "",
-});
-
-// Content-Type allowlist for fetchable content
-const ALLOWED_CONTENT_TYPES = ["text/html", "application/xhtml+xml", "text/plain", "application/json"];
-
-// Playwright session counter for unique session names (avoids EADDRINUSE)
-let pwSessionId = 0;
-
-// Browser error page indicators (from Chromium)
-const BROWSER_ERROR_PATTERNS = [
-	"ERR_NAME_NOT_RESOLVED",
-	"ERR_CONNECTION_REFUSED",
-	"ERR_CONNECTION_TIMED_OUT",
-	"ERR_CERT_DATE_INVALID",
-	"ERR_CERT_AUTHORITY_INVALID",
-	"ERR_CERT_COMMON_NAME_INVALID",
-	"ERR_EMPTY_RESPONSE",
-	"ERR_SSL_PROTOCOL_ERROR",
-	"This site can't be reached",
-	"This page isn't working",
-	"Your connection is not private",
-];
-
-// HTTP status codes that should NOT be retried (client errors, not transient)
-const NON_RETRYABLE_STATUSES = new Set([400, 401, 403, 404, 405, 410, 414, 451]);
-
-// ---------------------------------------------------------------------------
-// Retry with exponential backoff
-// ---------------------------------------------------------------------------
-
-async function withRetry(fn, { retries = 2, baseDelay = 2000, label = "operation" } = {}) {
-	for (let attempt = 0; ; attempt++) {
-		try {
-			return await fn();
-		} catch (e) {
-			if (attempt >= retries) throw e;
-			// Don't retry non-transient errors
-			if (e.nonRetryable || e.needsBrowser) throw e;
-			const delay = baseDelay * 2 ** attempt;
-			console.error(`${label}: attempt ${attempt + 1} failed (${e.message}), retrying in ${delay}ms...`);
-			await new Promise((r) => setTimeout(r, delay));
-		}
-	}
-}
+const BASE_DIR = import.meta.dirname;
 
 // ---------------------------------------------------------------------------
 // Entry
@@ -74,11 +25,12 @@ async function withRetry(fn, { retries = 2, baseDelay = 2000, label = "operation
 const [cmd, ...argv] = process.argv.slice(2);
 
 try {
-	if (cmd === "search") await search(argv);
-	else if (cmd === "content") await content(argv);
+	if (cmd === "verify") await verify();
+	else if (cmd === "search") await search(argv);
+	else if (cmd === "content") await contentCmd(argv);
 	else usage(cmd);
 } catch (e) {
-	console.error(`Error: ${e.message}`);
+	console.error(formatError(e, BASE_DIR));
 	process.exit(1);
 }
 
@@ -86,58 +38,152 @@ try {
 // Commands
 // ---------------------------------------------------------------------------
 
-async function search(argv) {
-	const args = [...argv];
+async function verify() {
+	const config = loadConfig();
+	console.error("Config loaded successfully.");
 
-	const ci = args.indexOf("--content");
-	const withContent = ci !== -1;
-	if (withContent) args.splice(ci, 1);
+	const title = await runSession(config, (session) => {
+		session.goto("https://example.com");
+		return session.eval("() => document.title");
+	});
 
-	let count = 10;
-	const ni = args.indexOf("-n");
-	if (ni !== -1) {
-		const parsed = parseInt(args[ni + 1], 10);
-		count = Math.min(Number.isNaN(parsed) || parsed < 1 ? 10 : parsed, 20);
-		args.splice(ni, 2);
+	if (title !== "Example Domain") {
+		throw new Error(`Unexpected page title: "${title}" (expected "Example Domain")`);
 	}
 
-	const query = args.join(" ").trim();
+	console.log("Setup verified — browser connection, navigation, and content extraction all work.");
+}
+
+async function search(argv) {
+	const { query, count, withContent, engine } = parseSearchArgs(argv);
 	if (!query) {
-		console.error("Usage: web.js search <query> [-n <num>] [--content]");
+		console.error("Usage: web.js search <query> [-n <num>] [--content] [--engine google|bing|ddg|brave]");
 		process.exit(1);
 	}
 
-	const results = await fetchResults(query, count);
+	const config = loadConfig();
 
-	if (!results.length) {
+	const { items, engine: usedEngine } = await runSession(config, (session) => {
+		const result = searchWithFallback(session, query, count, engine);
+
+		// Extract content from each result URL (sequential, same session)
+		if (withContent && result.items.length) {
+			for (const item of result.items) {
+				try {
+					item.content = extractContent(session, item.link);
+				} catch (err) {
+					item.content = `(Error: ${err.message})`;
+				}
+			}
+		}
+
+		return result;
+	}, { leaveOpen: (err) => err instanceof SearchError });
+
+	if (!items.length) {
 		console.error("No results found.");
 		process.exit(0);
 	}
 
-	if (withContent) {
-		const CONCURRENCY = 3;
-		await parallelMap(results, (r) => fetchContent(r.link).then((c) => (r.content = c)), CONCURRENCY);
-	}
-
-	for (let i = 0; i < results.length; i++) {
-		const r = results[i];
-		console.log(`--- Result ${i + 1} ---`);
-		console.log(`Title: ${r.title}`);
-		console.log(`Link: ${r.link}`);
-		console.log(`Snippet: ${r.snippet}`);
-		if (r.content) console.log(`Content:\n${r.content}`);
-		console.log("");
-	}
+	console.log(formatResults(items, { query, engine: usedEngine }));
 }
 
-async function content(argv) {
+/**
+ * Try engines in priority order until one returns results.
+ *
+ * When `engine` is specified (via --engine flag), only that engine is used.
+ * Otherwise, tries each engine in DEFAULT_ENGINE_ORDER.
+ *
+ * SearchErrors (captcha/blocking) trigger fallback to the next engine.
+ * If all engines fail, the last SearchError is re-thrown so runSession
+ * can leave the session open for LLM intervention.
+ *
+ * @returns {{ items: Array, engine: string }} Results and the engine that produced them
+ */
+function searchWithFallback(session, query, count, engine) {
+	const order = engine ? [engine] : DEFAULT_ENGINE_ORDER;
+	let lastError = null;
+
+	for (const engineId of order) {
+		let items;
+		let currentError = null;
+		try {
+			items = searchWithEngine(session, query, count, engineId);
+		} catch (err) {
+			if (!(err instanceof SearchError)) throw err;
+			lastError = err;
+			currentError = err;
+			items = [];
+		}
+
+		if (items.length) {
+			return { items, engine: engineId };
+		}
+
+		// Log and continue to next engine
+		const nextIdx = order.indexOf(engineId) + 1;
+		if (nextIdx < order.length) {
+			const label = currentError ? currentError.message : "No results";
+			const nextName = ENGINES[order[nextIdx]]?.name || order[nextIdx];
+			console.error(`${label} — trying ${nextName}...`);
+		}
+	}
+
+	// All engines failed with a search error — re-throw for LLM handoff
+	if (lastError) {
+		lastError.alternatives = order.filter(e => e !== lastError.engine);
+		throw lastError;
+	}
+
+	return { items: [], engine: order[order.length - 1] };
+}
+
+/**
+ * Search with a specific engine and return extracted results.
+ *
+ * Uses the ENGINES registry for URL building, DOM extraction, and
+ * blocking detection. Throws SearchError on captcha/blocking so the
+ * caller can attempt fallback or propagate for LLM handoff.
+ */
+function searchWithEngine(session, query, count, engineId) {
+	const engine = ENGINES[engineId];
+	if (!engine) throw new Error(`Unknown search engine: ${engineId}`);
+
+	session.goto(engine.searchUrl(query));
+
+	const blocking = engine.detectBlocking(session);
+	if (blocking) {
+		throw new SearchError(
+			blocking.message,
+			{ category: blocking.category, engine: engineId, query },
+		);
+	}
+
+	return session.eval(engine.extractExpr(count)) || [];
+}
+
+async function contentCmd(argv) {
 	const url = argv[0];
 	if (!url) {
 		console.error("Usage: web.js content <url>");
 		process.exit(1);
 	}
 
-	const result = await fetchContentWithFallback(url);
+	requireHttpUrl(url);
+
+	// HEAD check — binary content is downloaded via curl, no browser needed
+	const head = headContentType(url);
+	if (!isExtractableContentType(head.contentType)) {
+		const dl = downloadToTemp(url, head);
+		console.log(formatDownloadResult(dl));
+		return;
+	}
+
+	const config = loadConfig();
+
+	const result = await runSession(config, (session) => {
+		return extractPageContent(session, url);
+	});
 
 	if (!result) {
 		console.error("Could not extract readable content.");
@@ -148,335 +194,113 @@ async function content(argv) {
 	console.log(result.markdown);
 }
 
+// ---------------------------------------------------------------------------
+// Content extraction — HEAD check routes to browser or curl download
+// ---------------------------------------------------------------------------
+
+/** Reject non-HTTP URL schemes with an actionable error. */
+function requireHttpUrl(url) {
+	if (!url.startsWith("http://") && !url.startsWith("https://")) {
+		throw new Error(`Unsupported URL scheme: ${url} (only http:// and https:// are supported)`);
+	}
+}
+
+/**
+ * Extract content from a URL, choosing browser or curl download.
+ *
+ * Does a HEAD request first: if the content-type is binary, downloads
+ * via curl (no browser needed). Otherwise extracts via the browser session.
+ * Returns a markdown string.
+ */
+function extractContent(session, url) {
+	requireHttpUrl(url);
+
+	const head = headContentType(url);
+	if (!isExtractableContentType(head.contentType)) {
+		const dl = downloadToTemp(url, head);
+		return formatDownloadResult(dl);
+	}
+
+	const result = extractPageContent(session, url);
+	return result?.markdown || "(Could not extract content)";
+}
+
+/**
+ * Navigate to a URL in the browser session and extract content as markdown.
+ *
+ * Handles navigation errors (PDFs, downloads), content-type detection
+ * (JSON, plain text, images, HTML), and browser error pages.
+ * Returns { title, markdown } or null if extraction fails.
+ */
+function extractPageContent(session, url) {
+	try {
+		session.goto(url);
+	} catch (err) {
+		// Navigation can fail for PDFs (browser PDF viewer disconnects the
+		// extension), downloads, or other non-page content.
+		// Strip raw execFileSync noise — only keep the first meaningful line.
+		const msg = err.stderr?.split("\n")[0]?.trim() || err.message.split("\n")[0];
+		throw new Error(`Navigation failed for ${url} (${msg})`);
+	}
+
+	const pageUrl = session.pageUrl();
+	if (isBrowserErrorUrl(pageUrl)) {
+		const bodyText = session.eval("() => document.body?.innerText?.substring(0, 300)");
+		throw new Error(`Browser error page: ${bodyText || pageUrl}`);
+	}
+
+	const contentType = session.eval("() => document.contentType") || "text/html";
+
+	// Reject non-extractable content types (images, video, binary)
+	if (!isExtractableContentType(contentType)) {
+		throw new Error(`Cannot extract content from ${contentType} (${url})`);
+	}
+
+	if (contentType.includes("application/json")) {
+		const text = session.eval("() => document.body?.innerText");
+		return text ? { title: null, markdown: formatJsonContent(text) } : null;
+	}
+
+	if (contentType.includes("text/plain")) {
+		const text = session.eval("() => document.body?.innerText");
+		return text ? { title: null, markdown: text } : null;
+	}
+
+	// HTML content — extract via Readability
+	const html = session.eval("() => document.documentElement.outerHTML");
+	if (!html) return null;
+
+	if (isBrowserErrorContent(html)) {
+		const bodyText = session.eval("() => document.body?.innerText?.substring(0, 300)");
+		throw new Error(`Browser error page: ${bodyText || "unknown error"}`);
+	}
+
+	return extractReadable(html, url);
+}
+
 function usage(cmd) {
 	console.error(
 		`Usage: web.js <command> [options]
 
 Commands:
-  search <query> [-n <num>] [--content]    Search the web
+  verify                                    Verify browser setup
+  search <query> [-n <num>] [--content]     Search the web
   content <url>                             Extract page content as markdown
 
 Options:
   -n <num>      Number of results (default: 10, max: 20)
   --content     Fetch and include page content from result URLs
+  --engine      Search engine: google, bing, ddg, or brave
+
+Default search tries: Google → DuckDuckGo → Brave → Bing (with fallback).
+Use --engine to target a specific engine (no fallback).
 
 Examples:
+  web.js verify
   web.js search "python asyncio best practices"
   web.js search "rust error handling" -n 10 --content
+  web.js search "test query" --engine ddg
   web.js content https://docs.example.com/guide`,
 	);
 	process.exit(cmd ? 1 : 0);
-}
-
-// ---------------------------------------------------------------------------
-// Search: Brave primary, DuckDuckGo fallback (both with retry)
-// ---------------------------------------------------------------------------
-
-async function fetchResults(query, max) {
-	// Try Brave first (more reliable)
-	try {
-		return await fetchBraveResults(query, max);
-	} catch (e) {
-		console.error(`Brave search failed (${e.message}), trying DuckDuckGo...`);
-	}
-
-	// Fallback to DuckDuckGo
-	return fetchDDGResults(query, max);
-}
-
-async function fetchDDGResults(query, max) {
-	return withRetry(
-		async () => {
-			const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-
-			const res = await fetch(url, {
-				headers: { "User-Agent": UA, Accept: "text/html", "Accept-Language": "en-US,en;q=0.9" },
-				signal: AbortSignal.timeout(10000),
-			});
-
-			if (!res.ok) {
-				const err = new Error(`HTTP ${res.status}`);
-				if (NON_RETRYABLE_STATUSES.has(res.status)) err.nonRetryable = true;
-				throw err;
-			}
-
-			const text = await res.text();
-			const doc = new JSDOM(text, { url, virtualConsole: quietConsole }).window.document;
-			const body = doc.body?.textContent || "";
-
-			if (body.includes("not a robot") || body.includes("bots use DuckDuckGo") ||
-				body.includes("anomaly-modal") || text.includes("anomaly-modal")) {
-				throw new Error("Bot detection triggered");
-			}
-
-			const results = [];
-
-			for (const el of doc.querySelectorAll(".result")) {
-				if (results.length >= max) break;
-
-				const a = el.querySelector(".result__a");
-				if (!a) continue;
-
-				let link = a.getAttribute("href") || "";
-				if (link.includes("uddg=")) {
-					try {
-						link = decodeURIComponent(
-							new URL(link, "https://duckduckgo.com").searchParams.get("uddg") || link,
-						);
-					} catch {}
-				}
-				if (!link.startsWith("http") || link.includes("duckduckgo.com/y.js")) continue;
-
-				results.push({
-					title: a.textContent?.trim() || "",
-					link,
-					snippet: el.querySelector(".result__snippet")?.textContent?.trim() || "",
-				});
-			}
-
-			return results;
-		},
-		{ retries: 1, baseDelay: 2000, label: "DDG" },
-	);
-}
-
-async function fetchBraveResults(query, max) {
-	return withRetry(
-		async () => {
-			const url = `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`;
-
-			const res = await fetch(url, {
-				headers: { "User-Agent": UA, Accept: "text/html", "Accept-Language": "en-US,en;q=0.9" },
-				signal: AbortSignal.timeout(10000),
-			});
-
-			if (!res.ok) {
-				const err = new Error(`HTTP ${res.status}`);
-				if (NON_RETRYABLE_STATUSES.has(res.status)) err.nonRetryable = true;
-				throw err;
-			}
-
-			const doc = new JSDOM(await res.text(), { url, virtualConsole: quietConsole }).window.document;
-			const results = [];
-
-			for (const el of doc.querySelectorAll('[data-type="web"]')) {
-				if (results.length >= max) break;
-
-				const a = el.querySelector("a[href]");
-				const href = a?.getAttribute("href") || "";
-				if (!href.startsWith("http")) continue;
-
-				const title = el.querySelector(".title")?.textContent?.trim() || "";
-				if (!title) continue;
-
-				const snippet = el.querySelector(".snippet-description, .generic-snippet .content")?.textContent?.trim() || "";
-
-				results.push({ title, link: href, snippet });
-			}
-
-			return results;
-		},
-		{ retries: 1, baseDelay: 2000, label: "Brave" },
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Content extraction (with retry + playwright fallback)
-// ---------------------------------------------------------------------------
-
-async function fetchContent(url) {
-	try {
-		const result = await fetchContentWithFallback(url);
-		return result ? result.markdown : "(Could not extract content)";
-	} catch (e) {
-		return `(Error: ${e.message})`;
-	}
-}
-
-async function fetchContentWithFallback(url) {
-	// Try fetch + Readability first (with retry, only on transient errors)
-	const result = await withRetry(
-		async () => {
-			const res = await fetch(url, {
-				headers: {
-					"User-Agent": UA,
-					Accept: "text/html,application/xhtml+xml",
-					"Accept-Language": "en-US,en;q=0.9",
-				},
-				signal: AbortSignal.timeout(15000),
-			});
-
-			if (!res.ok) {
-				const err = new Error(`HTTP ${res.status}: ${res.statusText}`);
-				if (NON_RETRYABLE_STATUSES.has(res.status)) err.nonRetryable = true;
-				throw err;
-			}
-
-			// Check Content-Type before reading body
-			const ct = (res.headers.get("content-type") || "").toLowerCase();
-			const allowed = ALLOWED_CONTENT_TYPES.some((t) => ct.includes(t));
-			if (!allowed && ct) {
-				const err = new Error(`Unsupported content type: ${ct}`);
-				err.nonRetryable = true;
-				throw err;
-			}
-
-			const body = await res.text();
-
-			// Handle non-HTML text content types
-			if (ct.includes("application/json")) {
-				try {
-					return { title: null, markdown: "```json\n" + JSON.stringify(JSON.parse(body), null, 2) + "\n```" };
-				} catch {
-					return { title: null, markdown: body };
-				}
-			}
-			if (ct.includes("text/plain")) {
-				return { title: null, markdown: body };
-			}
-
-			const extracted = extractReadable(body, url);
-			if (!extracted) {
-				const err = new Error("Could not extract readable content (page may require JavaScript)");
-				err.needsBrowser = true;
-				throw err;
-			}
-			return extracted;
-		},
-		{ retries: 1, baseDelay: 2000, label: `Fetch ${url}` },
-	).catch((e) => {
-		// Don't fall back to playwright for non-retryable (4xx, bad content-type) errors
-		if (e.nonRetryable && !e.needsBrowser) {
-			console.error(`${e.message}`);
-			return null;
-		}
-		return undefined; // signal: proceed to playwright fallback
-	});
-
-	if (result !== undefined) return result;
-
-	// Fallback: use playwright-cli for JS-rendered content
-	console.error(`Falling back to playwright-cli for ${url}`);
-	return fetchWithPlaywright(url);
-}
-
-function fetchWithPlaywright(url) {
-	const session = `fetch-${process.pid}-${pwSessionId++}`;
-	try {
-		execFileSync("playwright-cli", ["-s", session, "open", `--config=${PW_CONFIG}`, url], {
-			stdio: "pipe",
-			timeout: 20000,
-		});
-
-		// Check if browser landed on an error page (chrome-error://)
-		const pageUrl = parsePlaywrightString(
-			execFileSync("playwright-cli", ["-s", session, "eval", "window.location.href"], {
-				encoding: "utf-8",
-				timeout: 5000,
-			}),
-		);
-		if (pageUrl?.startsWith("chrome-error://")) {
-			console.error("Playwright landed on a browser error page.");
-			return null;
-		}
-
-		const raw = execFileSync("playwright-cli", ["-s", session, "eval", "document.documentElement.outerHTML"], {
-			maxBuffer: 10 * 1024 * 1024,
-			encoding: "utf-8",
-			timeout: 10000,
-		});
-
-		const html = parsePlaywrightString(raw);
-		if (!html) return null;
-
-		// Detect browser error pages by content (fallback for non-chrome-error:// pages)
-		if (isBrowserErrorPage(html)) {
-			console.error("Playwright rendered a browser error page, not real content.");
-			return null;
-		}
-
-		return extractReadable(html, url);
-	} catch (e) {
-		console.error(`Playwright fallback failed: ${e.message}`);
-		return null;
-	} finally {
-		try {
-			execFileSync("playwright-cli", ["-s", session, "close"], { stdio: "pipe", timeout: 5000 });
-		} catch {}
-	}
-}
-
-/**
- * Parse a JSON-encoded string from playwright-cli output.
- * Finds the first line starting with '"' and JSON-parses it.
- */
-function parsePlaywrightString(raw) {
-	for (const line of raw.split("\n")) {
-		const trimmed = line.trim();
-		if (trimmed.startsWith('"')) {
-			try {
-				return JSON.parse(trimmed);
-			} catch {}
-		}
-	}
-	return null;
-}
-
-function isBrowserErrorPage(html) {
-	return BROWSER_ERROR_PATTERNS.some((p) => html.includes(p));
-}
-
-// ---------------------------------------------------------------------------
-// Readability + markdown conversion
-// ---------------------------------------------------------------------------
-
-function extractReadable(html, url) {
-	const article = new Readability(new JSDOM(html, { url, virtualConsole: quietConsole }).window.document).parse();
-
-	if (article?.content) {
-		return { title: article.title || null, markdown: toMarkdown(article.content) };
-	}
-
-	const doc = new JSDOM(html, { url, virtualConsole: quietConsole }).window.document;
-	for (const el of doc.querySelectorAll("script, style, noscript, nav, header, footer, aside")) {
-		el.remove();
-	}
-
-	const title = doc.querySelector("title")?.textContent?.trim() || null;
-	const main =
-		doc.querySelector("main, article, [role='main'], .content, #content") || doc.body;
-	const content = main?.innerHTML || "";
-
-	return content.trim().length > 100
-		? { title, markdown: toMarkdown(content) }
-		: null;
-}
-
-function toMarkdown(html) {
-	return td
-		.turndown(html)
-		.replace(/\[\\?\[\s*\\?\]\]\([^)]*\)/g, "")
-		.replace(/ +/g, " ")
-		.replace(/\s+([,.])/g, "$1")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
-}
-
-// ---------------------------------------------------------------------------
-// Concurrency-limited parallel map
-// ---------------------------------------------------------------------------
-
-async function parallelMap(items, fn, concurrency) {
-	const results = [];
-	let i = 0;
-
-	async function worker() {
-		while (i < items.length) {
-			const idx = i++;
-			results[idx] = await fn(items[idx], idx);
-		}
-	}
-
-	await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-	return results;
 }
