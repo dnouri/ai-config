@@ -2,3 +2,4 @@ node_modules
 .pi/
 tmp/
 .playwright-cli/
+__pycache__/
