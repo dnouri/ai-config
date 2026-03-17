@@ -1,6 +1,31 @@
 import { execFileSync } from "child_process";
+import { writeFileSync, mkdirSync, chmodSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
 let sessionCounter = 0;
+let headlessWrapperPath = null;
+
+/**
+ * Create a launcher script that starts the browser in headless mode.
+ *
+ * playwright-cli's extension mode spawns the browser binary directly,
+ * bypassing Playwright's launch options. This wrapper injects --headless=new
+ * so the browser runs without a visible window while still loading extensions
+ * (supported in Chromium 112+).
+ *
+ * The wrapper is created once per process and reused across sessions.
+ */
+function headlessWrapper(executablePath) {
+	if (!headlessWrapperPath) {
+		const dir = join(tmpdir(), `web-search-headless-${process.pid}`);
+		mkdirSync(dir, { recursive: true });
+		headlessWrapperPath = join(dir, "browser-headless");
+		writeFileSync(headlessWrapperPath, `#!/bin/sh\nexec ${JSON.stringify(executablePath)} --headless=new "$@"\n`);
+		chmodSync(headlessWrapperPath, 0o755);
+	}
+	return headlessWrapperPath;
+}
 
 /**
  * Generate a unique session name for playwright-cli.
@@ -24,7 +49,10 @@ export function buildSessionEnv(config) {
 	};
 
 	if (config.browser?.launchOptions?.executablePath) {
-		env.PLAYWRIGHT_MCP_EXECUTABLE_PATH = config.browser.launchOptions.executablePath;
+		env.PLAYWRIGHT_MCP_EXECUTABLE_PATH =
+			config.browser.launchOptions.headless === true
+				? headlessWrapper(config.browser.launchOptions.executablePath)
+				: config.browser.launchOptions.executablePath;
 	}
 	if (config.browser?.userDataDir) {
 		env.PLAYWRIGHT_MCP_USER_DATA_DIR = config.browser.userDataDir;

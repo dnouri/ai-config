@@ -1,5 +1,6 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "fs";
 import { parsePlaywrightResult, buildSessionEnv, sessionName, connectionError } from "./session.js";
 
 describe("parsePlaywrightResult", () => {
@@ -95,6 +96,43 @@ describe("buildSessionEnv", () => {
 		const config = { extensionToken: "tok", browser: {} };
 		const env = buildSessionEnv(config);
 		assert.equal(env.PLAYWRIGHT_MCP_USER_DATA_DIR, undefined);
+	});
+
+	test("wraps executablePath with headless launcher when headless is true", () => {
+		const config = {
+			extensionToken: "tok",
+			browser: { launchOptions: { headless: true, executablePath: "/opt/brave/brave" } },
+		};
+		const env = buildSessionEnv(config);
+
+		// Should point to a generated wrapper, not the original binary
+		assert.ok(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH);
+		assert.notEqual(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH, "/opt/brave/brave");
+
+		// Wrapper should exist and contain --headless=new and the real path
+		const wrapper = readFileSync(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH, "utf-8");
+		assert.match(wrapper, /--headless=new/);
+		assert.match(wrapper, /\/opt\/brave\/brave/);
+	});
+
+	test("does not wrap executablePath when headless is false or unset", () => {
+		const noHeadless = {
+			extensionToken: "tok",
+			browser: { launchOptions: { executablePath: "/usr/bin/chromium" } },
+		};
+		assert.equal(
+			buildSessionEnv(noHeadless).PLAYWRIGHT_MCP_EXECUTABLE_PATH,
+			"/usr/bin/chromium",
+		);
+
+		const explicitFalse = {
+			extensionToken: "tok",
+			browser: { launchOptions: { headless: false, executablePath: "/usr/bin/chromium" } },
+		};
+		assert.equal(
+			buildSessionEnv(explicitFalse).PLAYWRIGHT_MCP_EXECUTABLE_PATH,
+			"/usr/bin/chromium",
+		);
 	});
 });
 
