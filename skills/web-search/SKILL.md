@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: Web search and content extraction via real browser. Searches with Google, Bing, DuckDuckGo, or Brave (auto-fallback). Extracts page content as markdown. Uses the user's automation browser — handles SPAs, anti-bot detection, and logged-in sessions. Requires one-time browser setup.
+description: Web search, content extraction, and product image discovery via real browser. Searches with Google, Bing, DuckDuckGo, or Brave (auto-fallback). Extracts page content as markdown including image URLs. Handles SPAs, anti-bot detection, and logged-in sessions. Requires one-time browser setup.
 ---
 
 # Web Search
@@ -148,9 +148,27 @@ curl -s 'https://www.reddit.com/r/sub/comments/ID/.json' -H 'User-Agent: web-sea
 
 Some sites leak navigation chrome through Readability extraction (e.g., BBC cookie banners, GDPR modals). This is inherent to automated extraction — not fixable without site-specific rules.
 
+## Product Images
+
+When the user wants to **see** a product (not just read about it), use `--content` to extract page content from individual results. Product pages often include image URLs as `![](url)` in the extracted markdown.
+
+**Workflow:**
+1. Search: `{baseDir}/web.js search "SHEIN black hoodie" -n 3 --content`
+2. Look for `![](url)` patterns in the output — these are product images
+3. Download one: `curl -sL -o /tmp/product.jpg "https://img.ltwebstatic.com/...webp"`
+4. Send it to the user via the message tool with the downloaded file as media
+
+If `--content` doesn't yield images (some SPAs strip them), try extracting from a single product page:
+```bash
+{baseDir}/web.js content https://example.com/product-page
+```
+
+**Tip:** `.webp` image URLs from retail sites work as-is — no conversion needed.
+
 ## When to Use
 
 - Searching for documentation, API references, or current information
 - Extracting content from web pages (articles, docs, blog posts)
 - Reading JavaScript-rendered SPAs that HTTP-based tools can't handle
+- Product research and visual shopping — use `--content` to get image URLs
 - Any web search task — this is the primary web search skill
