@@ -1,7 +1,7 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "fs";
-import { parsePlaywrightResult, buildSessionEnv, sessionName, connectionError } from "./session.js";
+import { readFileSync, existsSync } from "fs";
+import { parsePlaywrightResult, buildSessionEnv, sessionName, connectionError, headlessPidFile } from "./session.js";
 
 describe("parsePlaywrightResult", () => {
 	test("extracts JSON string from playwright-cli output", () => {
@@ -133,6 +133,40 @@ describe("buildSessionEnv", () => {
 			buildSessionEnv(explicitFalse).PLAYWRIGHT_MCP_EXECUTABLE_PATH,
 			"/usr/bin/chromium",
 		);
+	});
+});
+
+describe("headlessPidFile", () => {
+	test("returns a path when headless is true", () => {
+		const config = {
+			browser: { launchOptions: { headless: true, executablePath: "/opt/brave/brave" } },
+		};
+		const pidFile = headlessPidFile(config);
+		assert.ok(pidFile);
+		assert.match(pidFile, /web-search-headless-.*\.pid$/);
+	});
+
+	test("returns null when headless is false or unset", () => {
+		assert.equal(headlessPidFile({ browser: { launchOptions: {} } }), null);
+		assert.equal(headlessPidFile({ browser: { launchOptions: { headless: false } } }), null);
+	});
+});
+
+describe("headless wrapper writes PID file", () => {
+	test("wrapper script records PID before exec", () => {
+		const config = {
+			extensionToken: "tok",
+			browser: { launchOptions: { headless: true, executablePath: "/opt/brave/brave" } },
+		};
+		const env = buildSessionEnv(config);
+		const wrapper = readFileSync(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH, "utf-8");
+		const pidFile = headlessPidFile(config);
+
+		// Wrapper must write PID before exec so the file exists when the browser starts
+		assert.match(wrapper, /echo \$\$ >/);
+		assert.ok(wrapper.indexOf("echo $$") < wrapper.indexOf("exec "));
+		// PID file path must appear in the wrapper
+		assert.ok(wrapper.includes(pidFile), `wrapper should reference pid file ${pidFile}`);
 	});
 });
 

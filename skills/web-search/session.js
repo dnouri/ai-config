@@ -1,10 +1,18 @@
 import { execFileSync } from "child_process";
-import { writeFileSync, mkdirSync, chmodSync } from "fs";
+import { writeFileSync, readFileSync, mkdirSync, chmodSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
 let sessionCounter = 0;
-let headlessWrapperPath = null;
+let headlessDir = null;
+
+/**
+ * Return the PID file path for the headless browser, or null if not headless.
+ */
+export function headlessPidFile(config) {
+	if (config.browser?.launchOptions?.headless !== true) return null;
+	return join(tmpdir(), `web-search-headless-${process.pid}`, "browser.pid");
+}
 
 /**
  * Create a launcher script that starts the browser in headless mode.
@@ -14,17 +22,22 @@ let headlessWrapperPath = null;
  * so the browser runs without a visible window while still loading extensions
  * (supported in Chromium 112+).
  *
- * The wrapper is created once per process and reused across sessions.
+ * The wrapper also records the browser PID so runSession can kill it after
+ * the session closes (cdpRelay spawns the browser detached, so playwright-cli's
+ * close command only drops the WebSocket — it doesn't terminate the process).
  */
-function headlessWrapper(executablePath) {
-	if (!headlessWrapperPath) {
-		const dir = join(tmpdir(), `web-search-headless-${process.pid}`);
-		mkdirSync(dir, { recursive: true });
-		headlessWrapperPath = join(dir, "browser-headless");
-		writeFileSync(headlessWrapperPath, `#!/bin/sh\nexec ${JSON.stringify(executablePath)} --headless=new "$@"\n`);
-		chmodSync(headlessWrapperPath, 0o755);
+function headlessWrapper(executablePath, pidFile) {
+	if (!headlessDir) {
+		headlessDir = join(tmpdir(), `web-search-headless-${process.pid}`);
+		mkdirSync(headlessDir, { recursive: true });
 	}
-	return headlessWrapperPath;
+	const wrapperPath = join(headlessDir, "browser-headless");
+	writeFileSync(
+		wrapperPath,
+		`#!/bin/sh\necho $$ > ${JSON.stringify(pidFile)}\nexec ${JSON.stringify(executablePath)} --headless=new "$@"\n`,
+	);
+	chmodSync(wrapperPath, 0o755);
+	return wrapperPath;
 }
 
 /**
@@ -49,10 +62,10 @@ export function buildSessionEnv(config) {
 	};
 
 	if (config.browser?.launchOptions?.executablePath) {
-		env.PLAYWRIGHT_MCP_EXECUTABLE_PATH =
-			config.browser.launchOptions.headless === true
-				? headlessWrapper(config.browser.launchOptions.executablePath)
-				: config.browser.launchOptions.executablePath;
+		const pidFile = headlessPidFile(config);
+		env.PLAYWRIGHT_MCP_EXECUTABLE_PATH = pidFile
+			? headlessWrapper(config.browser.launchOptions.executablePath, pidFile)
+			: config.browser.launchOptions.executablePath;
 	}
 	if (config.browser?.userDataDir) {
 		env.PLAYWRIGHT_MCP_USER_DATA_DIR = config.browser.userDataDir;
@@ -212,6 +225,27 @@ export async function runSession(config, callback, options = {}) {
 			} catch {
 				// Best-effort cleanup
 			}
+			killHeadlessBrowser(config);
 		}
+	}
+}
+
+/**
+ * Kill the headless browser process using the PID file written by the wrapper.
+ * No-op when headless is not enabled or the PID file doesn't exist.
+ */
+function killHeadlessBrowser(config) {
+	const pidFile = headlessPidFile(config);
+	if (!pidFile || !existsSync(pidFile)) return;
+
+	try {
+		const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+		if (!pid || isNaN(pid)) return;
+		// Kill the process group (negative PID) to catch all child processes
+		try { process.kill(-pid, "SIGTERM"); } catch { /* ignore — may already be gone */ }
+		// Also kill the PID directly in case it wasn't a process group leader
+		try { process.kill(pid, "SIGTERM"); } catch { /* ignore */ }
+	} finally {
+		try { unlinkSync(pidFile); } catch { /* ignore */ }
 	}
 }
