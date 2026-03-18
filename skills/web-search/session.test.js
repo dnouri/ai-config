@@ -1,7 +1,9 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "fs";
-import { parsePlaywrightResult, buildSessionEnv, sessionName, connectionError, headlessPidFile } from "./session.js";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir, homedir } from "os";
+import { parsePlaywrightResult, buildSessionEnv, sessionName, connectionError, headlessPidFile, reapStaleResources } from "./session.js";
 
 describe("parsePlaywrightResult", () => {
 	test("extracts JSON string from playwright-cli output", () => {
@@ -209,5 +211,75 @@ describe("sessionName", () => {
 		const a = sessionName();
 		const b = sessionName();
 		assert.notEqual(a, b);
+	});
+});
+
+describe("reapStaleResources", () => {
+	const deadPid = 99999999; // PID that certainly doesn't exist
+	const staleDir = join(tmpdir(), `web-search-headless-${deadPid}`);
+
+	afterEach(() => {
+		try { rmSync(staleDir, { recursive: true, force: true }); } catch {}
+	});
+
+	test("removes tmp directory from a dead process", () => {
+		mkdirSync(staleDir, { recursive: true });
+		writeFileSync(join(staleDir, "browser-headless"), "#!/bin/sh\n");
+		assert.ok(existsSync(staleDir));
+
+		reapStaleResources();
+
+		assert.ok(!existsSync(staleDir), "stale dir should be removed");
+	});
+
+	test("removes tmp directory with PID file from a dead process", () => {
+		mkdirSync(staleDir, { recursive: true });
+		writeFileSync(join(staleDir, "browser-headless"), "#!/bin/sh\n");
+		writeFileSync(join(staleDir, "browser.pid"), "88888888\n"); // also dead
+
+		reapStaleResources();
+
+		assert.ok(!existsSync(staleDir), "stale dir with PID file should be removed");
+	});
+
+	test("does not touch directory owned by current process", () => {
+		const ownDir = join(tmpdir(), `web-search-headless-${process.pid}`);
+		mkdirSync(ownDir, { recursive: true });
+		writeFileSync(join(ownDir, "browser-headless"), "#!/bin/sh\n");
+
+		reapStaleResources();
+
+		assert.ok(existsSync(ownDir), "own directory should be left alone");
+		rmSync(ownDir, { recursive: true, force: true });
+	});
+
+	test("removes stale daemon session files from dead processes", () => {
+		const daemonBase = join(homedir(), ".cache", "ms-playwright", "daemon");
+		// Find an existing hash dir, or create a test one
+		const hashDir = join(daemonBase, "test-reap-hash");
+		mkdirSync(hashDir, { recursive: true });
+
+		const staleSession = join(hashDir, `web-search-${deadPid}-0.session`);
+		writeFileSync(staleSession, "");
+		assert.ok(existsSync(staleSession));
+
+		reapStaleResources();
+
+		assert.ok(!existsSync(staleSession), "stale session file should be removed");
+		rmSync(hashDir, { recursive: true, force: true });
+	});
+
+	test("does not remove session files owned by the current process", () => {
+		const daemonBase = join(homedir(), ".cache", "ms-playwright", "daemon");
+		const hashDir = join(daemonBase, "test-reap-hash");
+		mkdirSync(hashDir, { recursive: true });
+
+		const ownSession = join(hashDir, `web-search-${process.pid}-0.session`);
+		writeFileSync(ownSession, "");
+
+		reapStaleResources();
+
+		assert.ok(existsSync(ownSession), "own session file should be left alone");
+		rmSync(hashDir, { recursive: true, force: true });
 	});
 });

@@ -1,7 +1,7 @@
 import { execFileSync } from "child_process";
-import { writeFileSync, readFileSync, mkdirSync, chmodSync, existsSync, unlinkSync } from "fs";
+import { writeFileSync, readFileSync, mkdirSync, chmodSync, existsSync, unlinkSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
+import { tmpdir, homedir } from "os";
 
 let sessionCounter = 0;
 let headlessDir = null;
@@ -117,6 +117,119 @@ export function parsePlaywrightResult(output) {
 }
 
 /**
+ * Check whether a process is still running.
+ */
+function isProcessAlive(pid) {
+	try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+/**
+ * Check whether a PID belongs to a browser process (brave/chromium/chrome).
+ *
+ * Used before killing a PID read from a stale PID file. If the original
+ * browser died and the PID was recycled by an unrelated process, this
+ * prevents us from killing an innocent bystander.
+ *
+ * Returns false when the process is dead or when we can't determine its
+ * identity — the safe default is to not kill.
+ */
+function isBrowserProcess(pid) {
+	// Try /proc (Linux — fast, no subprocess)
+	try {
+		const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf-8");
+		return /brave|chrom/i.test(cmdline);
+	} catch { /* /proc not available or process gone */ }
+
+	// Fall back to ps (macOS, BSDs)
+	try {
+		const cmd = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+			encoding: "utf-8",
+			timeout: 2_000,
+		}).trim();
+		return /brave|chrom/i.test(cmd);
+	} catch { /* process gone or ps failed */ }
+
+	return false;
+}
+
+/**
+ * Reap resources orphaned by dead web-search processes.
+ *
+ * Each web.js invocation stores its browser PID file in a directory keyed
+ * by its own process.pid: /tmp/web-search-headless-{pid}/. If that process
+ * dies before cleanup (timeout, crash, SIGKILL), its browser and playwright
+ * daemons are orphaned.
+ *
+ * This function scans for such orphans and cleans them up. It is safe for
+ * concurrent sessions: resources owned by still-running processes are never
+ * touched.
+ */
+export function reapStaleResources() {
+	reapStaleBrowsers();
+	reapStaleDaemonSessions();
+}
+
+/**
+ * Kill browsers and remove tmp dirs left by dead web.js processes.
+ */
+function reapStaleBrowsers() {
+	const prefix = "web-search-headless-";
+	const tmp = tmpdir();
+	let entries;
+	try { entries = readdirSync(tmp); } catch { return; }
+
+	for (const entry of entries) {
+		if (!entry.startsWith(prefix)) continue;
+		const ownerPid = parseInt(entry.slice(prefix.length), 10);
+		if (!ownerPid || isNaN(ownerPid)) continue;
+		if (ownerPid === process.pid) continue;
+		if (isProcessAlive(ownerPid)) continue;
+
+		// Owner is dead — reap its browser and directory
+		const dir = join(tmp, entry);
+		const pidFile = join(dir, "browser.pid");
+		if (existsSync(pidFile)) {
+			try {
+				const browserPid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+				if (browserPid && !isNaN(browserPid) && isBrowserProcess(browserPid)) {
+					try { process.kill(-browserPid, "SIGTERM"); } catch { /* already gone */ }
+					try { process.kill(browserPid, "SIGTERM"); } catch { /* already gone */ }
+				}
+			} catch { /* ignore read errors */ }
+		}
+		try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+	}
+}
+
+/**
+ * Remove stale playwright-cli daemon session files left by dead processes.
+ *
+ * Session files live under ~/.cache/ms-playwright/daemon/{hash}/ and are
+ * named web-search-{pid}-{counter}.session. Removing a stale session file
+ * causes the daemon to exit on its next health check.
+ */
+function reapStaleDaemonSessions() {
+	const daemonBase = join(homedir(), ".cache", "ms-playwright", "daemon");
+	let hashes;
+	try { hashes = readdirSync(daemonBase); } catch { return; }
+
+	for (const hash of hashes) {
+		const hashDir = join(daemonBase, hash);
+		let files;
+		try { files = readdirSync(hashDir); } catch { continue; }
+
+		for (const file of files) {
+			const match = file.match(/^web-search-(\d+)-\d+\.session$/);
+			if (!match) continue;
+			const ownerPid = parseInt(match[1], 10);
+			if (ownerPid === process.pid || isProcessAlive(ownerPid)) continue;
+
+			try { unlinkSync(join(hashDir, file)); } catch { /* ignore */ }
+		}
+	}
+}
+
+/**
  * Create a user-friendly error message for browser connection failures.
  *
  * @param {Error} err - The raw execFileSync error from playwright-cli open
@@ -148,6 +261,8 @@ export function connectionError(err) {
  * @returns {Promise<*>} The callback's return value
  */
 export async function runSession(config, callback, options = {}) {
+	reapStaleResources();
+
 	const name = sessionName();
 	const env = buildSessionEnv(config);
 
@@ -231,21 +346,27 @@ export async function runSession(config, callback, options = {}) {
 }
 
 /**
- * Kill the headless browser process using the PID file written by the wrapper.
+ * Kill the headless browser process and clean up the tmp directory.
  * No-op when headless is not enabled or the PID file doesn't exist.
  */
 function killHeadlessBrowser(config) {
 	const pidFile = headlessPidFile(config);
-	if (!pidFile || !existsSync(pidFile)) return;
+	if (!pidFile) return;
 
-	try {
-		const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
-		if (!pid || isNaN(pid)) return;
-		// Kill the process group (negative PID) to catch all child processes
-		try { process.kill(-pid, "SIGTERM"); } catch { /* ignore — may already be gone */ }
-		// Also kill the PID directly in case it wasn't a process group leader
-		try { process.kill(pid, "SIGTERM"); } catch { /* ignore */ }
-	} finally {
-		try { unlinkSync(pidFile); } catch { /* ignore */ }
+	const dir = join(tmpdir(), `web-search-headless-${process.pid}`);
+
+	if (existsSync(pidFile)) {
+		try {
+			const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+			if (pid && !isNaN(pid)) {
+				// Kill the process group (negative PID) to catch all child processes
+				try { process.kill(-pid, "SIGTERM"); } catch { /* ignore — may already be gone */ }
+				// Also kill the PID directly in case it wasn't a process group leader
+				try { process.kill(pid, "SIGTERM"); } catch { /* ignore */ }
+			}
+		} catch { /* ignore read errors */ }
 	}
+
+	// Remove the entire tmp directory (wrapper script + PID file)
+	try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
 }
