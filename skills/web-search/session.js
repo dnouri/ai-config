@@ -1,10 +1,10 @@
 import { execFileSync } from "child_process";
 import { writeFileSync, readFileSync, mkdirSync, chmodSync, existsSync, unlinkSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
-import { tmpdir, homedir } from "os";
+import { tmpdir, homedir, platform } from "os";
 
 let sessionCounter = 0;
-let headlessDir = null;
+
 
 /**
  * Return the PID file path for the headless browser, or null if not headless.
@@ -27,11 +27,9 @@ export function headlessPidFile(config) {
  * close command only drops the WebSocket — it doesn't terminate the process).
  */
 function headlessWrapper(executablePath, pidFile) {
-	if (!headlessDir) {
-		headlessDir = join(tmpdir(), `web-search-headless-${process.pid}`);
-		mkdirSync(headlessDir, { recursive: true });
-	}
-	const wrapperPath = join(headlessDir, "browser-headless");
+	const dir = join(tmpdir(), `web-search-headless-${process.pid}`);
+	mkdirSync(dir, { recursive: true });
+	const wrapperPath = join(dir, "browser-headless");
 	writeFileSync(
 		wrapperPath,
 		`#!/bin/sh\necho $$ > ${JSON.stringify(pidFile)}\nexec ${JSON.stringify(executablePath)} --headless=new "$@"\n`,
@@ -114,6 +112,19 @@ export function parsePlaywrightResult(output) {
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Resolve the playwright-cli daemon session directory.
+ *
+ * Must match the logic in playwright's own registry.js — it uses
+ * platform-specific cache dirs, not a hardcoded ~/.cache path.
+ */
+function daemonBaseDir() {
+	const p = platform();
+	if (p === "darwin") return join(homedir(), "Library", "Caches", "ms-playwright", "daemon");
+	if (p === "win32") return join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "ms-playwright", "daemon");
+	return join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ms-playwright", "daemon");
 }
 
 /**
@@ -209,7 +220,7 @@ function reapStaleBrowsers() {
  * causes the daemon to exit on its next health check.
  */
 function reapStaleDaemonSessions() {
-	const daemonBase = join(homedir(), ".cache", "ms-playwright", "daemon");
+	const daemonBase = daemonBaseDir();
 	let hashes;
 	try { hashes = readdirSync(daemonBase); } catch { return; }
 
@@ -240,10 +251,12 @@ export function connectionError(err) {
 	const hint = stderr.includes("timeout")
 		? "The browser may already be running — close it and retry."
 		: "Check that the browser and Playwright MCP Bridge extension are installed.";
-	return new Error(
+	const error = new Error(
 		`Could not connect to the automation browser.\n${hint}\n` +
 		`Run \`web.js verify\` to diagnose, or see references/setup-browser.md.`,
 	);
+	error.code = "BROWSER_UNAVAILABLE";
+	return error;
 }
 
 /**
@@ -276,11 +289,15 @@ export async function runSession(config, callback, options = {}) {
 		});
 	};
 
-	// Open the browser with extension mode
+	// Open the browser with extension mode.
+	// The open command starts a daemon before connecting to the browser.
+	// If the browser connection fails (e.g. extension timeout), the daemon
+	// may already be running — we must shut it down before propagating.
 	const openArgs = ["open", "--extension", `--config=${config.configPath}`];
 	try {
 		cli(openArgs, { timeout: 15_000 });
 	} catch (err) {
+		cleanupFailedOpen(cli, config, name);
 		throw connectionError(err);
 	}
 
@@ -343,6 +360,33 @@ export async function runSession(config, callback, options = {}) {
 			killHeadlessBrowser(config);
 		}
 	}
+}
+
+/**
+ * Clean up after a failed `open` command.
+ *
+ * When `open` fails (e.g. extension timeout), the daemon may be in one of
+ * two states:
+ * 1. Listening on its socket — `close` can reach and stop it.
+ * 2. Not listening (createContext failed before server.listen) — `close`
+ *    prints "not open" and the daemon stays alive. We must kill it directly.
+ *
+ * We try `close` first (clean path), then fall back to pkill on the
+ * daemon's session file pattern (safe — the session name is unique).
+ */
+function cleanupFailedOpen(cli, config, sessionName) {
+	// Try the clean path — works when the daemon opened its socket
+	try { cli(["close"], { timeout: 5_000 }); } catch { /* may not be reachable */ }
+
+	// Kill any daemon that's stuck without a socket (matched by session file)
+	try {
+		execFileSync("pkill", ["-f", `daemon-session=.*${sessionName}\\.session`], {
+			timeout: 3_000,
+			stdio: "ignore",
+		});
+	} catch { /* no matching process, or already dead */ }
+
+	killHeadlessBrowser(config);
 }
 
 /**

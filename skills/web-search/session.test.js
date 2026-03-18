@@ -173,11 +173,12 @@ describe("headless wrapper writes PID file", () => {
 });
 
 describe("connectionError", () => {
-	test("wraps error with clear message", () => {
+	test("wraps error with clear message and BROWSER_UNAVAILABLE code", () => {
 		const raw = new Error("Command failed");
 		const wrapped = connectionError(raw);
 		assert.match(wrapped.message, /Could not connect to the automation browser/);
 		assert.match(wrapped.message, /setup-browser\.md/);
+		assert.equal(wrapped.code, "BROWSER_UNAVAILABLE");
 	});
 
 	test("suggests closing browser when stderr mentions timeout", () => {

@@ -19,6 +19,30 @@ import {
 const BASE_DIR = import.meta.dirname;
 
 // ---------------------------------------------------------------------------
+// Retry helper — handles transient browser-unavailable errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Retry a function on transient failures with exponential backoff.
+ *
+ * Only retries errors with code BROWSER_UNAVAILABLE (another session holds
+ * the browser). All other errors propagate immediately.
+ */
+async function withBrowserRetry(fn, { retries = 2, delays = [5_000, 15_000] } = {}) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await fn();
+		} catch (err) {
+			const retryable = err.code === "BROWSER_UNAVAILABLE" && attempt < retries;
+			if (!retryable) throw err;
+			const delay = delays[Math.min(attempt, delays.length - 1)];
+			console.error(`Browser busy — retrying in ${delay / 1000}s... (attempt ${attempt + 2}/${retries + 1})`);
+			await new Promise(resolve => setTimeout(resolve, delay));
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
@@ -63,22 +87,24 @@ async function search(argv) {
 
 	const config = loadConfig();
 
-	const { items, engine: usedEngine } = await runSession(config, (session) => {
-		const result = searchWithFallback(session, query, count, engine);
+	const { items, engine: usedEngine } = await withBrowserRetry(() =>
+		runSession(config, (session) => {
+			const result = searchWithFallback(session, query, count, engine);
 
-		// Extract content from each result URL (sequential, same session)
-		if (withContent && result.items.length) {
-			for (const item of result.items) {
-				try {
-					item.content = extractContent(session, item.link);
-				} catch (err) {
-					item.content = `(Error: ${err.message})`;
+			// Extract content from each result URL (sequential, same session)
+			if (withContent && result.items.length) {
+				for (const item of result.items) {
+					try {
+						item.content = extractContent(session, item.link);
+					} catch (err) {
+						item.content = `(Error: ${err.message})`;
+					}
 				}
 			}
-		}
 
-		return result;
-	}, { leaveOpen: (err) => err instanceof SearchError });
+			return result;
+		}, { leaveOpen: (err) => err instanceof SearchError }),
+	);
 
 	if (!items.length) {
 		console.error("No results found.");
@@ -181,9 +207,11 @@ async function contentCmd(argv) {
 
 	const config = loadConfig();
 
-	const result = await runSession(config, (session) => {
-		return extractPageContent(session, url);
-	});
+	const result = await withBrowserRetry(() =>
+		runSession(config, (session) => {
+			return extractPageContent(session, url);
+		}),
+	);
 
 	if (!result) {
 		console.error("Could not extract readable content.");
