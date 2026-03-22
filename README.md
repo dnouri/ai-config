@@ -1,10 +1,10 @@
 # dnopi
 
-6 skills and 2 extensions for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+6 skills and 3 extensions for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
 ## Installation
 
-Install all 6 skills and 2 extensions:
+Install all 6 skills and 3 extensions:
 
 ```bash
 pi install npm:dnopi
@@ -54,6 +54,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 |-----------|-------------|
 | [notify.ts](extensions/notify.ts) | Desktop notification when agent needs attention |
 | [pisay.ts](extensions/pisay.ts) | π mascot — extension UI protocol test harness (`/pisay help`) |
+| [loop.ts](extensions/loop.ts) | Repeat a prompt or template command indefinitely (`/loop`, `/loop stop`) |
 
 ## Requirements
 
