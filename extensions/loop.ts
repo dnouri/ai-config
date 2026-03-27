@@ -12,6 +12,10 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 import { readFileSync } from "node:fs";
 
+function getCommandPath(command: { path?: string; sourceInfo?: { path?: string } }): string | undefined {
+	return command.sourceInfo?.path ?? command.path;
+}
+
 function parseArgs(raw: string): string[] {
 	const args: string[] = [];
 	let cur = "", quote: string | null = null;
@@ -47,9 +51,10 @@ export default function (pi: ExtensionAPI) {
 		const spaceIdx = raw.indexOf(" ");
 		const name = spaceIdx === -1 ? raw.slice(1) : raw.slice(1, spaceIdx);
 		const argsStr = spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1);
-		const cmd = pi.getCommands().find((c) => c.name === name && c.source === "prompt" && c.path);
-		if (!cmd?.path) return null;
-		const { body } = parseFrontmatter<Record<string, string>>(readFileSync(cmd.path, "utf-8"));
+		const cmd = pi.getCommands().find((c) => c.name === name && c.source === "prompt" && getCommandPath(c));
+		const commandPath = cmd ? getCommandPath(cmd) : undefined;
+		if (!commandPath) return null;
+		const { body } = parseFrontmatter<Record<string, string>>(readFileSync(commandPath, "utf-8"));
 		return substituteArgs(body, parseArgs(argsStr));
 	}
 
