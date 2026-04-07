@@ -236,6 +236,12 @@ export function applyChildEvent(result, event) {
 		return applyChildEvent(result, { type: "message_end", message: event.message });
 	}
 
+	if (event.type === "session") {
+		if (event.id) result.sessionId = event.id;
+		if (event.cwd) result.sessionCwd = event.cwd;
+		return false;
+	}
+
 	return false;
 }
 
@@ -249,6 +255,22 @@ export function getBestAvailableContent(result) {
 		getPartialAssistantText(result) ||
 		getPartialToolOutput(result) ||
 		getToolCallPreview(result) ||
+		"(running...)"
+	);
+}
+
+/**
+ * Like getBestAvailableContent but prefers live streaming content
+ * over static completed messages.  Use for onUpdate display content
+ * so the human sees tool output as it streams rather than the
+ * assistant text that preceded the tool call.
+ */
+export function getStreamingDisplayContent(result) {
+	return (
+		getPartialAssistantText(result) ||
+		getPartialToolOutput(result) ||
+		getToolCallPreview(result) ||
+		getFinalOutput(result) ||
 		"(running...)"
 	);
 }

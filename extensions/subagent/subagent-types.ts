@@ -43,6 +43,8 @@ export interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	sessionId?: string;
+	sessionCwd?: string;
 	partialAssistantMessage?: Message;
 	toolExecutions: ToolExecutionState[];
 	streamSequence: number;

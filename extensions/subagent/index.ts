@@ -34,14 +34,34 @@ import {
 	createSingleResult,
 	finalizeSingleResult,
 	getBestAvailableContent,
+	getStreamingDisplayContent,
 	isResultError,
 	isResultRunning,
 } from "./subagent-stream.js";
 import { renderCall, renderResult } from "./subagent-render.js";
 import type { SingleResult, SubagentDetails } from "./subagent-types.js";
 
+function formatElapsed(startTime: number): string {
+	const sec = (Date.now() - startTime) / 1000;
+	if (sec < 60) return `${sec.toFixed(0)}s`;
+	const min = Math.floor(sec / 60);
+	return `${min}m${Math.floor(sec % 60)}s`;
+}
+
+function formatStreamingStats(r: SingleResult, startTime: number): string {
+	const parts: string[] = [];
+	if (r.usage.turns) parts.push(`${r.usage.turns} turn${r.usage.turns > 1 ? "s" : ""}`);
+	if (r.usage.input || r.usage.output) parts.push(`↑${r.usage.input} ↓${r.usage.output}`);
+	if (r.usage.cost) parts.push(`$${r.usage.cost.toFixed(4)}`);
+	const toolCount = r.toolExecutions.length;
+	if (toolCount) parts.push(`${toolCount} tool${toolCount > 1 ? "s" : ""}`);
+	parts.push(formatElapsed(startTime));
+	return parts.join(" · ");
+}
+
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
+const UPDATE_THROTTLE_MS = 500;
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
 	items: TIn[],
@@ -121,13 +141,44 @@ async function runSingleAgent(
 		step,
 	}) as SingleResult;
 
-	const emitUpdate = () => {
+	const startTime = Date.now();
+
+	const doEmitUpdate = () => {
 		if (onUpdate) {
+			const text = getStreamingDisplayContent(currentResult)
+				+ `\n\n${formatStreamingStats(currentResult, startTime)}`;
 			onUpdate({
-				content: [{ type: "text", text: getBestAvailableContent(currentResult) }],
+				content: [{ type: "text", text }],
 				details: makeDetails([currentResult]),
 			});
 		}
+	};
+
+	// Throttle streaming updates so the TUI is not flooded.
+	// Boundary events (message_end, tool_execution_start/end) emit immediately;
+	// high-frequency events (message_update, tool_execution_update) are batched.
+	let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingUpdate = false;
+
+	const emitUpdate = (immediate = false) => {
+		if (immediate) {
+			if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+			pendingUpdate = false;
+			doEmitUpdate();
+			return;
+		}
+		pendingUpdate = true;
+		if (!throttleTimer) {
+			throttleTimer = setTimeout(() => {
+				throttleTimer = null;
+				if (pendingUpdate) { pendingUpdate = false; doEmitUpdate(); }
+			}, UPDATE_THROTTLE_MS);
+		}
+	};
+
+	const flushPendingUpdate = () => {
+		if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+		if (pendingUpdate) { pendingUpdate = false; doEmitUpdate(); }
 	};
 
 	try {
@@ -154,6 +205,10 @@ async function runSingleAgent(
 			});
 			let buffer = "";
 
+			const BOUNDARY_EVENTS = new Set([
+				"message_end", "tool_execution_start", "tool_execution_end", "tool_result_end",
+			]);
+
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
 				let event: any;
@@ -164,7 +219,7 @@ async function runSingleAgent(
 				}
 
 				if (applyChildEvent(currentResult, event)) {
-					emitUpdate();
+					emitUpdate(BOUNDARY_EVENTS.has(event.type));
 				}
 			};
 
@@ -181,6 +236,7 @@ async function runSingleAgent(
 
 			proc.on("close", (code) => {
 				if (buffer.trim()) processLine(buffer);
+				flushPendingUpdate();
 				resolve(code ?? 0);
 			});
 

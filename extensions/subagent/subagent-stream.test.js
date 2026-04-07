@@ -6,6 +6,7 @@ import {
 	finalizeSingleResult,
 	getBestAvailableContent,
 	getDisplayItems,
+	getStreamingDisplayContent,
 } from "./subagent-stream.js";
 
 function createAssistantMessage(content, overrides = {}) {
@@ -198,5 +199,57 @@ describe("subagent stream aggregation", () => {
 			{ type: "toolCall", name: "bash", args: { command: "ls -la" } },
 			{ type: "text", text: "package.json\nREADME.md\n" },
 		]);
+	});
+
+	test("streaming display prefers partial tool output over finalized assistant text", () => {
+		const result = createResult();
+		// Assistant says something then calls bash
+		applyChildEvent(result, {
+			type: "message_end",
+			message: createAssistantMessage([
+				{ type: "text", text: "I'll check the date." },
+				{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "date" } },
+			]),
+		});
+		// Tool starts streaming
+		applyChildEvent(result, {
+			type: "tool_execution_start",
+			toolCallId: "call_1",
+			toolName: "bash",
+			args: { command: "date" },
+		});
+		applyChildEvent(result, {
+			type: "tool_execution_update",
+			toolCallId: "call_1",
+			toolName: "bash",
+			partialResult: { content: [{ type: "text", text: "Tue Apr 7" }] },
+		});
+		// getBestAvailableContent returns static assistant text (for parent LLM)
+		assert.equal(getBestAvailableContent(result), "I'll check the date.");
+		// getStreamingDisplayContent returns live tool output (for human display)
+		assert.equal(getStreamingDisplayContent(result), "Tue Apr 7");
+	});
+
+	test("streaming display falls back to final output when nothing is active", () => {
+		const result = createResult();
+		applyChildEvent(result, {
+			type: "message_end",
+			message: createAssistantMessage([{ type: "text", text: "Here is the answer." }]),
+		});
+		// No active tool — both functions return the same thing
+		assert.equal(getBestAvailableContent(result), "Here is the answer.");
+		assert.equal(getStreamingDisplayContent(result), "Here is the answer.");
+	});
+
+	test("captures session id and cwd from session event", () => {
+		const result = createResult();
+		const changed = applyChildEvent(result, {
+			type: "session",
+			id: "abc-123",
+			cwd: "/home/user/project",
+		});
+		assert.equal(changed, false, "session event should not trigger a render");
+		assert.equal(result.sessionId, "abc-123");
+		assert.equal(result.sessionCwd, "/home/user/project");
 	});
 });

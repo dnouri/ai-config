@@ -51,7 +51,10 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 
 		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
 
-		if (!frontmatter.name || !frontmatter.description) {
+		// Accept both upstream format (name/description) and pi native format
+		// (display_name/description). Fall back to filename as name.
+		const agentName = frontmatter.name || frontmatter.display_name || entry.name.replace(/\.md$/, "");
+		if (!frontmatter.description) {
 			continue;
 		}
 
@@ -61,7 +64,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			.filter(Boolean);
 
 		agents.push({
-			name: frontmatter.name,
+			name: agentName,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model: frontmatter.model,

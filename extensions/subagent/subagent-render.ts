@@ -5,8 +5,10 @@
  * can evolve independently.
  */
 
+import * as fs from "node:fs";
 import * as os from "node:os";
-import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
+import * as path from "node:path";
+import { getAgentDir, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import type { AgentScope } from "./agents.js";
 import { parseToolCallDisplay } from "./subagent-core.js";
@@ -29,6 +31,17 @@ function formatTokens(count: number): string {
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	return `${(count / 1000000).toFixed(1)}M`;
+}
+
+function findSessionBasename(sessionId: string, cwd: string): string | null {
+	const safePath = `--${cwd.replace(/^[\/\\]/, "").replace(/[\/\\:]/g, "-")}--`;
+	const sessionDir = path.join(getAgentDir(), "sessions", safePath);
+	try {
+		const match = fs.readdirSync(sessionDir).find((f) => f.includes(sessionId) && f.endsWith(".jsonl"));
+		return match ?? null;
+	} catch {
+		return null;
+	}
 }
 
 function formatUsageStats(
@@ -55,6 +68,19 @@ function formatUsageStats(
 	}
 	if (model) parts.push(model);
 	return parts.join(" ");
+}
+
+function formatResultStats(r: SingleResult): string {
+	const parts: string[] = [];
+	const usageStr = formatUsageStats(r.usage, r.model);
+	if (usageStr) parts.push(usageStr);
+	const toolCount = r.toolExecutions.length;
+	if (toolCount) parts.push(`${toolCount} tool${toolCount > 1 ? "s" : ""}`);
+	if (r.sessionId && r.sessionCwd) {
+		const basename = findSessionBasename(r.sessionId, r.sessionCwd);
+		if (basename) parts.push(basename);
+	}
+	return parts.join(" · ");
 }
 
 const PRIMARY_STYLE_COLOR: Record<string, string> = { output: "toolOutput", accent: "accent" };
@@ -111,7 +137,7 @@ function addExpandedResultBody(container: Container, r: SingleResult, theme: any
 		container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 	}
 
-	const usageStr = formatUsageStats(r.usage, r.model);
+	const usageStr = formatResultStats(r);
 	if (usageStr) container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
 }
 
@@ -257,7 +283,7 @@ function renderSingleResult(
 				container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 			}
 		}
-		const usageStr = formatUsageStats(r.usage, r.model);
+		const usageStr = formatResultStats(r);
 		if (usageStr) {
 			container.addChild(new Spacer(1));
 			container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
@@ -273,7 +299,7 @@ function renderSingleResult(
 		text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 		if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 	}
-	const usageStr = formatUsageStats(r.usage, r.model);
+	const usageStr = formatResultStats(r);
 	if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
 	return new Text(text, 0, 0);
 }
