@@ -4,7 +4,7 @@
 
 ## Installation
 
-Install all 6 skills and 3 extensions:
+Install all 6 skills and 4 extensions:
 
 ```bash
 pi install npm:dnopi
@@ -55,6 +55,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 | [notify.ts](extensions/notify.ts) | Desktop notification when agent needs attention |
 | [pisay.ts](extensions/pisay.ts) | π mascot — extension UI protocol test harness (`/pisay help`) |
 | [loop.ts](extensions/loop.ts) | Repeat a prompt or template command indefinitely (`/loop`, `/loop stop`) |
+| [subagent/](extensions/subagent/README.md) | Delegate tasks to specialized subagents with isolated context |
 
 ## Requirements
 
