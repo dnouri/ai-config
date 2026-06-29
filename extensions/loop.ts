@@ -67,11 +67,20 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(`Loop stopped after ${n} iteration(s).`, "info");
 	}
 
-	function next(ctx: ExtensionContext) {
+	function rootSessionCanSchedule(ctx: ExtensionContext): boolean {
+		// Background sessions may finish without a visible UI. Like notify.ts, only
+		// let the user-facing session advance the loop, and only when no follow-up
+		// is already queued.
+		return ctx.hasUI && !ctx.hasPendingMessages();
+	}
+
+	function scheduleNext(ctx: ExtensionContext) {
+		if (!rootSessionCanSchedule(ctx)) return;
+
 		iteration++;
 		ctx.ui.setStatus("loop", `⟳ loop #${iteration}`);
 		ctx.ui.notify(`Loop iteration #${iteration}`, "info");
-		pi.sendUserMessage(promptText, { deliverAs: "followUp" });
+		pi.sendUserMessage(promptText, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 	}
 
 	pi.registerCommand("loop", {
@@ -98,12 +107,12 @@ export default function (pi: ExtensionAPI) {
 
 			looping = true;
 			iteration = 0;
-			next(ctx);
+			scheduleNext(ctx);
 		},
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
-		if (!looping) return;
+		if (!looping || !ctx.hasUI) return;
 
 		// Abort (Escape) stops the loop
 		const last = event.messages[event.messages.length - 1];
@@ -112,7 +121,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		next(ctx);
+		scheduleNext(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {
