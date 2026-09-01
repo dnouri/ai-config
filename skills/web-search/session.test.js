@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir, homedir } from "os";
-import { parsePlaywrightResult, buildSessionEnv, sessionName, connectionError, headlessPidFile, reapStaleResources } from "./session.js";
+import { parsePlaywrightResult, buildSessionEnv, sessionName, connectionError, browserPidFile, reapStaleResources } from "./session.js";
 
 describe("parsePlaywrightResult", () => {
 	test("extracts JSON string from playwright-cli output", () => {
@@ -76,13 +76,21 @@ describe("buildSessionEnv", () => {
 		assert.equal(env.PATH, process.env.PATH);
 	});
 
-	test("sets PLAYWRIGHT_MCP_EXECUTABLE_PATH from expanded config", () => {
+	test("wraps the configured browser so web-search owns its lifecycle", () => {
 		const config = {
 			extensionToken: "tok",
-			browser: { launchOptions: { executablePath: "/opt/brave/brave" } },
+			browser: {
+				userDataDir: "/home/user/.config/web-search/profile",
+				launchOptions: { executablePath: "/opt/brave/brave" },
+			},
 		};
 		const env = buildSessionEnv(config);
-		assert.equal(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH, "/opt/brave/brave");
+
+		assert.notEqual(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH, "/opt/brave/brave");
+		const wrapper = readFileSync(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH, "utf-8");
+		assert.match(wrapper, /\/opt\/brave\/brave/);
+		assert.match(wrapper, /--user-data-dir=\/home\/user\/\.config\/web-search\/profile/);
+		assert.doesNotMatch(wrapper, /--headless=new/);
 	});
 
 	test("sets PLAYWRIGHT_MCP_USER_DATA_DIR from expanded config", () => {
@@ -117,57 +125,35 @@ describe("buildSessionEnv", () => {
 		assert.match(wrapper, /\/opt\/brave\/brave/);
 	});
 
-	test("does not wrap executablePath when headless is false or unset", () => {
-		const noHeadless = {
-			extensionToken: "tok",
-			browser: { launchOptions: { executablePath: "/usr/bin/chromium" } },
-		};
-		assert.equal(
-			buildSessionEnv(noHeadless).PLAYWRIGHT_MCP_EXECUTABLE_PATH,
-			"/usr/bin/chromium",
-		);
-
-		const explicitFalse = {
-			extensionToken: "tok",
-			browser: { launchOptions: { headless: false, executablePath: "/usr/bin/chromium" } },
-		};
-		assert.equal(
-			buildSessionEnv(explicitFalse).PLAYWRIGHT_MCP_EXECUTABLE_PATH,
-			"/usr/bin/chromium",
-		);
-	});
 });
 
-describe("headlessPidFile", () => {
-	test("returns a path when headless is true", () => {
+describe("browserPidFile", () => {
+	test("returns a path for every managed browser", () => {
 		const config = {
-			browser: { launchOptions: { headless: true, executablePath: "/opt/brave/brave" } },
+			browser: { launchOptions: { executablePath: "/opt/brave/brave" } },
 		};
-		const pidFile = headlessPidFile(config);
+		const pidFile = browserPidFile(config);
 		assert.ok(pidFile);
-		assert.match(pidFile, /web-search-headless-.*\.pid$/);
+		assert.match(pidFile, /web-search-browser-.*\/browser\.pid$/);
 	});
 
-	test("returns null when headless is false or unset", () => {
-		assert.equal(headlessPidFile({ browser: { launchOptions: {} } }), null);
-		assert.equal(headlessPidFile({ browser: { launchOptions: { headless: false } } }), null);
+	test("returns null without a configured executable", () => {
+		assert.equal(browserPidFile({ browser: { launchOptions: {} } }), null);
 	});
 });
 
-describe("headless wrapper writes PID file", () => {
-	test("wrapper script records PID before exec", () => {
+describe("browser wrapper writes PID file", () => {
+	test("wrapper records PID before exec", () => {
 		const config = {
 			extensionToken: "tok",
-			browser: { launchOptions: { headless: true, executablePath: "/opt/brave/brave" } },
+			browser: { launchOptions: { executablePath: "/opt/brave/brave" } },
 		};
 		const env = buildSessionEnv(config);
 		const wrapper = readFileSync(env.PLAYWRIGHT_MCP_EXECUTABLE_PATH, "utf-8");
-		const pidFile = headlessPidFile(config);
+		const pidFile = browserPidFile(config);
 
-		// Wrapper must write PID before exec so the file exists when the browser starts
 		assert.match(wrapper, /echo \$\$ >/);
 		assert.ok(wrapper.indexOf("echo $$") < wrapper.indexOf("exec "));
-		// PID file path must appear in the wrapper
 		assert.ok(wrapper.includes(pidFile), `wrapper should reference pid file ${pidFile}`);
 	});
 });
@@ -217,7 +203,7 @@ describe("sessionName", () => {
 
 describe("reapStaleResources", () => {
 	const deadPid = 99999999; // PID that certainly doesn't exist
-	const staleDir = join(tmpdir(), `web-search-headless-${deadPid}`);
+	const staleDir = join(tmpdir(), `web-search-browser-${deadPid}`);
 
 	afterEach(() => {
 		try { rmSync(staleDir, { recursive: true, force: true }); } catch {}
@@ -225,7 +211,7 @@ describe("reapStaleResources", () => {
 
 	test("removes tmp directory from a dead process", () => {
 		mkdirSync(staleDir, { recursive: true });
-		writeFileSync(join(staleDir, "browser-headless"), "#!/bin/sh\n");
+		writeFileSync(join(staleDir, "browser-launcher"), "#!/bin/sh\n");
 		assert.ok(existsSync(staleDir));
 
 		reapStaleResources();
@@ -235,7 +221,7 @@ describe("reapStaleResources", () => {
 
 	test("removes tmp directory with PID file from a dead process", () => {
 		mkdirSync(staleDir, { recursive: true });
-		writeFileSync(join(staleDir, "browser-headless"), "#!/bin/sh\n");
+		writeFileSync(join(staleDir, "browser-launcher"), "#!/bin/sh\n");
 		writeFileSync(join(staleDir, "browser.pid"), "88888888\n"); // also dead
 
 		reapStaleResources();
@@ -244,9 +230,9 @@ describe("reapStaleResources", () => {
 	});
 
 	test("does not touch directory owned by current process", () => {
-		const ownDir = join(tmpdir(), `web-search-headless-${process.pid}`);
+		const ownDir = join(tmpdir(), `web-search-browser-${process.pid}`);
 		mkdirSync(ownDir, { recursive: true });
-		writeFileSync(join(ownDir, "browser-headless"), "#!/bin/sh\n");
+		writeFileSync(join(ownDir, "browser-launcher"), "#!/bin/sh\n");
 
 		reapStaleResources();
 

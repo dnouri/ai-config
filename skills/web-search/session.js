@@ -6,34 +6,40 @@ import { acquireProfileLock } from "./lock.js";
 
 let sessionCounter = 0;
 
+const BROWSER_DIR_PREFIX = "web-search-browser-";
 
 /**
- * Return the PID file path for the headless browser, or null if not headless.
+ * Return the PID file path for the browser managed by this web.js process.
  */
-export function headlessPidFile(config) {
-	if (config.browser?.launchOptions?.headless !== true) return null;
-	return join(tmpdir(), `web-search-headless-${process.pid}`, "browser.pid");
+export function browserPidFile(config) {
+	if (!config.browser?.launchOptions?.executablePath) return null;
+	return join(tmpdir(), `${BROWSER_DIR_PREFIX}${process.pid}`, "browser.pid");
 }
 
 /**
- * Create a launcher script that starts the browser in headless mode.
+ * Create the executable that playwright-cli launches in extension mode.
  *
- * playwright-cli's extension mode spawns the browser binary directly,
- * bypassing Playwright's launch options. This wrapper injects --headless=new
- * so the browser runs without a visible window while still loading extensions
- * (supported in Chromium 112+).
- *
- * The wrapper also records the browser PID so runSession can kill it after
- * the session closes (cdpRelay spawns the browser detached, so playwright-cli's
- * close command only drops the WebSocket — it doesn't terminate the process).
+ * Current playwright-cli attach sessions neither honor browser.userDataDir
+ * for custom executables nor stop the external browser when detached. The
+ * wrapper supplies the dedicated profile, applies optional headless mode,
+ * and records the browser PID so web-search can own its lifecycle safely.
  */
-function headlessWrapper(executablePath, pidFile) {
-	const dir = join(tmpdir(), `web-search-headless-${process.pid}`);
+function browserWrapper(config, pidFile) {
+	const dir = join(tmpdir(), `${BROWSER_DIR_PREFIX}${process.pid}`);
 	mkdirSync(dir, { recursive: true });
-	const wrapperPath = join(dir, "browser-headless");
+	const wrapperPath = join(dir, "browser-launcher");
+	const executablePath = config.browser.launchOptions.executablePath;
+	const launchArgs = [];
+	if (config.browser.userDataDir) launchArgs.push(`--user-data-dir=${config.browser.userDataDir}`);
+	if (config.browser.launchOptions.headless === true) launchArgs.push("--headless=new");
+	const command = [
+		JSON.stringify(executablePath),
+		...launchArgs.map(arg => JSON.stringify(arg)),
+		'"$@"',
+	].join(" ");
 	writeFileSync(
 		wrapperPath,
-		`#!/bin/sh\necho $$ > ${JSON.stringify(pidFile)}\nexec ${JSON.stringify(executablePath)} --headless=new "$@"\n`,
+		`#!/bin/sh\necho $$ > ${JSON.stringify(pidFile)}\nexec ${command}\n`,
 	);
 	chmodSync(wrapperPath, 0o755);
 	return wrapperPath;
@@ -60,12 +66,8 @@ export function buildSessionEnv(config) {
 		PLAYWRIGHT_MCP_EXTENSION_TOKEN: config.extensionToken,
 	};
 
-	if (config.browser?.launchOptions?.executablePath) {
-		const pidFile = headlessPidFile(config);
-		env.PLAYWRIGHT_MCP_EXECUTABLE_PATH = pidFile
-			? headlessWrapper(config.browser.launchOptions.executablePath, pidFile)
-			: config.browser.launchOptions.executablePath;
-	}
+	const pidFile = browserPidFile(config);
+	if (pidFile) env.PLAYWRIGHT_MCP_EXECUTABLE_PATH = browserWrapper(config, pidFile);
 	if (config.browser?.userDataDir) {
 		env.PLAYWRIGHT_MCP_USER_DATA_DIR = config.browser.userDataDir;
 	}
@@ -168,7 +170,7 @@ function isBrowserProcess(pid) {
  * Reap resources orphaned by dead web-search processes.
  *
  * Each web.js invocation stores its browser PID file in a directory keyed
- * by its own process.pid: /tmp/web-search-headless-{pid}/. If that process
+ * by its own process.pid: /tmp/web-search-browser-{pid}/. If that process
  * dies before cleanup (timeout, crash, SIGKILL), its browser and playwright
  * daemons are orphaned.
  *
@@ -185,13 +187,14 @@ export function reapStaleResources() {
  * Kill browsers and remove tmp dirs left by dead web.js processes.
  */
 function reapStaleBrowsers() {
-	const prefix = "web-search-headless-";
+	const prefixes = [BROWSER_DIR_PREFIX, "web-search-headless-"];
 	const tmp = tmpdir();
 	let entries;
 	try { entries = readdirSync(tmp); } catch { return; }
 
 	for (const entry of entries) {
-		if (!entry.startsWith(prefix)) continue;
+		const prefix = prefixes.find(candidate => entry.startsWith(candidate));
+		if (!prefix) continue;
 		const ownerPid = parseInt(entry.slice(prefix.length), 10);
 		if (!ownerPid || isNaN(ownerPid)) continue;
 		if (ownerPid === process.pid) continue;
@@ -217,8 +220,8 @@ function reapStaleBrowsers() {
  * Remove stale playwright-cli daemon session files left by dead processes.
  *
  * Session files live under ~/.cache/ms-playwright/daemon/{hash}/ and are
- * named web-search-{pid}-{counter}.session. Removing a stale session file
- * causes the daemon to exit on its next health check.
+ * named web-search-{pid}-{counter}.session. Stale daemons are terminated by
+ * their unique session name before the abandoned file is removed.
  */
 function reapStaleDaemonSessions() {
 	const daemonBase = daemonBaseDir();
@@ -236,6 +239,7 @@ function reapStaleDaemonSessions() {
 			const ownerPid = parseInt(match[1], 10);
 			if (ownerPid === process.pid || isProcessAlive(ownerPid)) continue;
 
+			killSessionDaemon(file.slice(0, -".session".length));
 			try { unlinkSync(join(hashDir, file)); } catch { /* ignore */ }
 		}
 	}
@@ -244,14 +248,15 @@ function reapStaleDaemonSessions() {
 /**
  * Create a user-friendly error message for browser connection failures.
  *
- * @param {Error} err - The raw execFileSync error from playwright-cli open
+ * @param {Error} err - The raw execFileSync error from playwright-cli attach
  * @returns {Error} A new Error with a clear diagnostic message
  */
 export function connectionError(err) {
-	const stderr = err.stderr?.trim() || "";
-	const hint = stderr.includes("timeout")
-		? "The browser may already be running — close it and retry."
-		: "Check that the browser and Playwright MCP Bridge extension are installed.";
+	const details = `${err.stderr?.trim() || ""}\n${err.message || ""}`;
+	const timedOut = err.code === "ETIMEDOUT" || /tim(?:e|ed)\s*out/i.test(details);
+	const hint = timedOut
+		? "The browser may already be running, or the extension token may be stale — close the automation browser and refresh the token in config.json."
+		: "Check that the browser and Playwright extension are installed.";
 	const error = new Error(
 		`Could not connect to the automation browser.\n${hint}\n` +
 		`Run \`web.js verify\` to diagnose, or see references/setup-browser.md.`,
@@ -263,8 +268,8 @@ export function connectionError(err) {
 /**
  * Run a callback with a managed playwright-cli session.
  *
- * Opens a browser session via --extension, runs the callback with a session
- * object providing goto/eval/snapshot methods, then closes the session.
+ * Attaches to the dedicated browser via the Playwright extension, runs the
+ * callback, then detaches the CLI session and stops the managed browser.
  *
  * @param {object} config - Loaded config from loadConfig()
  * @param {function} callback - async (session) => result
@@ -300,15 +305,14 @@ async function runUnlockedSession(config, callback, options = {}) {
 		});
 	};
 
-	// Open the browser with extension mode.
-	// The open command starts a daemon before connecting to the browser.
-	// If the browser connection fails (e.g. extension timeout), the daemon
-	// may already be running — we must shut it down before propagating.
-	const openArgs = ["open", "--extension", `--config=${config.configPath}`];
+	// Current playwright-cli exposes extension sessions through `attach`.
+	// A failed attach may leave its detached daemon and browser behind, so
+	// both must be cleaned up before the connection error is propagated.
+	const attachArgs = ["attach", "--extension=chrome", `--config=${config.configPath}`];
 	try {
-		cli(openArgs, { timeout: 15_000 });
+		cli(attachArgs, { timeout: 15_000 });
 	} catch (err) {
-		cleanupFailedOpen(cli, config, name);
+		cleanupFailedAttach(cli, config, name);
 		throw connectionError(err);
 	}
 
@@ -364,64 +368,61 @@ async function runUnlockedSession(config, callback, options = {}) {
 	} finally {
 		if (shouldClose) {
 			try {
-				cli(["close"], { timeout: 5_000 });
+				cli(["detach"], { timeout: 5_000 });
 			} catch {
 				// Best-effort cleanup
 			}
-			killHeadlessBrowser(config);
+			killManagedBrowser(config);
 		}
 	}
 }
 
 /**
- * Clean up after a failed `open` command.
+ * Clean up after a failed `attach` command.
  *
- * When `open` fails (e.g. extension timeout), the daemon may be in one of
- * two states:
- * 1. Listening on its socket — `close` can reach and stop it.
- * 2. Not listening (createContext failed before server.listen) — `close`
- *    prints "not open" and the daemon stays alive. We must kill it directly.
- *
- * We try `close` first (clean path), then fall back to pkill on the
- * daemon's session file pattern (safe — the session name is unique).
+ * The daemon may not have opened its command socket yet, so detach is tried
+ * first and then the uniquely named daemon is terminated directly.
  */
-function cleanupFailedOpen(cli, config, sessionName) {
-	// Try the clean path — works when the daemon opened its socket
-	try { cli(["close"], { timeout: 5_000 }); } catch { /* may not be reachable */ }
+function cleanupFailedAttach(cli, config, sessionName) {
+	try { cli(["detach"], { timeout: 5_000 }); } catch { /* may not be reachable */ }
+	killSessionDaemon(sessionName);
+	killManagedBrowser(config);
+}
 
-	// Kill any daemon that's stuck without a socket (matched by session file)
-	try {
-		execFileSync("pkill", ["-f", `daemon-session=.*${sessionName}\\.session`], {
-			timeout: 3_000,
-			stdio: "ignore",
-		});
-	} catch { /* no matching process, or already dead */ }
-
-	killHeadlessBrowser(config);
+/** Kill old and current playwright-cli daemon shapes for one unique session. */
+function killSessionDaemon(sessionName) {
+	const patterns = [
+		`[/]cliDaemon\\.js ${sessionName}( |$)`,
+		`daemon-session=.*${sessionName}\\.session`,
+	];
+	for (const pattern of patterns) {
+		try {
+			execFileSync("pkill", ["-f", pattern], {
+				timeout: 3_000,
+				stdio: "ignore",
+			});
+		} catch { /* no matching process, or already dead */ }
+	}
 }
 
 /**
- * Kill the headless browser process and clean up the tmp directory.
- * No-op when headless is not enabled or the PID file doesn't exist.
+ * Stop the dedicated browser and remove its launcher directory.
  */
-function killHeadlessBrowser(config) {
-	const pidFile = headlessPidFile(config);
+function killManagedBrowser(config) {
+	const pidFile = browserPidFile(config);
 	if (!pidFile) return;
 
-	const dir = join(tmpdir(), `web-search-headless-${process.pid}`);
+	const dir = join(tmpdir(), `${BROWSER_DIR_PREFIX}${process.pid}`);
 
 	if (existsSync(pidFile)) {
 		try {
 			const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
-			if (pid && !isNaN(pid)) {
-				// Kill the process group (negative PID) to catch all child processes
-				try { process.kill(-pid, "SIGTERM"); } catch { /* ignore — may already be gone */ }
-				// Also kill the PID directly in case it wasn't a process group leader
-				try { process.kill(pid, "SIGTERM"); } catch { /* ignore */ }
+			if (pid && !isNaN(pid) && isBrowserProcess(pid)) {
+				try { process.kill(-pid, "SIGTERM"); } catch { /* already gone */ }
+				try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
 			}
 		} catch { /* ignore read errors */ }
 	}
 
-	// Remove the entire tmp directory (wrapper script + PID file)
 	try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
 }

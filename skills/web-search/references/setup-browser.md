@@ -30,7 +30,7 @@ A dedicated browser profile keeps automation isolated from the user's personal b
 mkdir -p ~/.config/web-search/ai-web-search-profile
 ```
 
-## Step 2: Install the Playwright MCP Bridge extension
+## Step 2: Install the Playwright Extension
 
 Launch the browser with the automation profile and navigate to the extension page.
 
@@ -52,13 +52,13 @@ If the user already has the extension installed in this profile, skip to Step 3.
 **Ask the user:** *"Now I need the extension's authentication token. In the automation browser:*
 
 1. *Click the **puzzle piece icon** (🧩) in the toolbar — that's the extensions menu*
-2. *Click **'Playwright MCP Bridge'** to open its status page*
+2. *Click **'Playwright Extension'** to open its status page*
 3. *You'll see a line like `PLAYWRIGHT_MCP_EXTENSION_TOKEN=abc123...`*
 4. *Copy and paste that whole line (or just the part after `=`) here"*
 
 **Wait for the user to paste the token.** Extract the token value (the part after `=` if they pasted the whole line).
 
-If the user has trouble finding the extension icon: *"Try clicking the three-dot menu → Extensions → Playwright MCP Bridge."*
+If the user has trouble finding the extension icon: *"Try clicking the three-dot menu → Extensions → Playwright Extension."*
 
 ## Step 4: Write the config file
 
@@ -78,6 +78,7 @@ cat > ~/.config/web-search/config.json << 'EOF'
   }
 }
 EOF
+chmod 600 ~/.config/web-search/config.json
 ```
 
 Replace `<TOKEN>` with the token from Step 3 and `<BROWSER_PATH>` with the browser path from Prerequisites.
@@ -115,6 +116,7 @@ This tests the full pipeline: load config → launch browser → connect via ext
 | Missing `extensionToken` | Token not set in config | Re-do Step 3, update config |
 | Extension connection timeout | Automation browser is already running | Close the automation browser, then retry (Step 5) |
 | Extension connection timeout | Extension not installed in automation profile | Re-do Step 2 with the automation profile |
-| Invalid token | Token mismatch between config and extension | Re-do Step 3 — get the token from the *automation profile's* extension |
+| Unsupported protocol version | `playwright-cli` and the extension are from different generations | Update `@playwright/cli` to the latest version, then retry |
+| Invalid token / timeout after an extension update | Token mismatch between config and extension | Re-do Step 3 — get the token from the *automation profile's* extension |
 | Browser executable not found | Wrong path in config | Fix `executablePath` in config (Step 4) |
 | `# Web Search Busy` | Another browser-backed web-search command is using the same automation profile | Retry after about 60 seconds; do not run multiple `web.js` browser operations in parallel |

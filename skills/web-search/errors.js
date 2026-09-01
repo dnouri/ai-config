@@ -99,7 +99,7 @@ export function formatError(err, baseDir) {
 		lines.push("");
 		lines.push(`1. View the page: \`playwright-cli -s ${s} snapshot\``);
 		lines.push("2. Interact with the page to resolve the issue");
-		lines.push(`3. Close the session: \`playwright-cli -s ${s} close\``);
+		lines.push(`3. Detach the session: \`playwright-cli -s ${s} detach\``);
 
 		if (err.query) {
 			lines.push(`4. Retry: \`${dir}/web.js search "${err.query}"\``);

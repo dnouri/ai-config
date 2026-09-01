@@ -105,7 +105,7 @@ describe("formatError", () => {
 		err.sessionName = "ws-1";
 		const output = formatError(err);
 		assert.match(output, /## How to resolve/);
-		assert.match(output, /playwright-cli -s ws-1 close/);
+		assert.match(output, /playwright-cli -s ws-1 detach/);
 	});
 
 	test("includes retry command with query for SearchError", () => {
