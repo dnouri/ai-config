@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { SearchError, formatError } from "./errors.js";
+import { SearchError, WebSearchBusyError, formatError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // SearchError
@@ -35,6 +35,27 @@ describe("SearchError", () => {
 });
 
 // ---------------------------------------------------------------------------
+// WebSearchBusyError
+// ---------------------------------------------------------------------------
+
+describe("WebSearchBusyError", () => {
+	test("uses a retry-after-60-seconds message without profile paths", () => {
+		const err = new WebSearchBusyError({
+			profileHash: "abc123",
+			ownerPid: 1234,
+			ownerOperation: "search",
+			requestedOperation: "content",
+		});
+
+		assert.equal(err.code, "WEB_SEARCH_BUSY");
+		assert.match(err.message, /Retry this command after about 60 seconds/);
+		assert.match(err.message, /Profile.*abc123/);
+		assert.match(err.message, /Owner PID/);
+		assert.ok(!err.message.includes("userDataDir"));
+	});
+});
+
+// ---------------------------------------------------------------------------
 // formatError
 // ---------------------------------------------------------------------------
 
@@ -63,6 +84,12 @@ describe("formatError", () => {
 		});
 		const output = formatError(err);
 		assert.match(output, /^# Search Error: Blocked\n/);
+	});
+
+	test("uses Web Search Busy heading for profile lock contention", () => {
+		const output = formatError(new WebSearchBusyError({ profileHash: "abc123" }));
+		assert.match(output, /^# Web Search Busy\n/);
+		assert.match(output, /Retry this command after about 60 seconds/);
 	});
 
 	test("includes bold session info when sessionName is present", () => {

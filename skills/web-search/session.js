@@ -2,6 +2,7 @@ import { execFileSync } from "child_process";
 import { writeFileSync, readFileSync, mkdirSync, chmodSync, existsSync, unlinkSync, readdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir, homedir, platform } from "os";
+import { acquireProfileLock } from "./lock.js";
 
 let sessionCounter = 0;
 
@@ -271,11 +272,21 @@ export function connectionError(err) {
  * @param {boolean|function} [options.leaveOpen] - Leave session open on error
  *   for LLM handoff. If a function, called with the error; session is left
  *   open only if the function returns true.
+ * @param {string} [options.operation] - Short operation label for lock metadata
  * @returns {Promise<*>} The callback's return value
  */
 export async function runSession(config, callback, options = {}) {
 	reapStaleResources();
 
+	const lock = acquireProfileLock(config, { operation: options.operation });
+	try {
+		return await runUnlockedSession(config, callback, options);
+	} finally {
+		lock.release();
+	}
+}
+
+async function runUnlockedSession(config, callback, options = {}) {
 	const name = sessionName();
 	const env = buildSessionEnv(config);
 

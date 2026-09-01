@@ -82,7 +82,12 @@ EOF
 
 Replace `<TOKEN>` with the token from Step 3 and `<BROWSER_PATH>` with the browser path from Prerequisites.
 
-The `~` in `userDataDir` is expanded automatically; absolute paths also work.
+The `~` in `userDataDir` is expanded automatically; absolute paths also work. The config contains the extension token, so keep it readable only by your user:
+
+```bash
+chmod 700 ~/.config/web-search
+chmod 600 ~/.config/web-search/config.json
+```
 
 ## Step 5: Close the automation browser
 
@@ -112,3 +117,4 @@ This tests the full pipeline: load config → launch browser → connect via ext
 | Extension connection timeout | Extension not installed in automation profile | Re-do Step 2 with the automation profile |
 | Invalid token | Token mismatch between config and extension | Re-do Step 3 — get the token from the *automation profile's* extension |
 | Browser executable not found | Wrong path in config | Fix `executablePath` in config (Step 4) |
+| `# Web Search Busy` | Another browser-backed web-search command is using the same automation profile | Retry after about 60 seconds; do not run multiple `web.js` browser operations in parallel |

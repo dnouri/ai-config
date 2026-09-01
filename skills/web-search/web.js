@@ -69,7 +69,7 @@ async function verify() {
 	const title = await runSession(config, (session) => {
 		session.goto("https://example.com");
 		return session.eval("() => document.title");
-	});
+	}, { operation: "verify" });
 
 	if (title !== "Example Domain") {
 		throw new Error(`Unexpected page title: "${title}" (expected "Example Domain")`);
@@ -103,7 +103,7 @@ async function search(argv) {
 			}
 
 			return result;
-		}, { leaveOpen: (err) => err instanceof SearchError }),
+		}, { operation: "search", leaveOpen: (err) => err instanceof SearchError }),
 	);
 
 	if (!items.length) {
@@ -210,7 +210,7 @@ async function contentCmd(argv) {
 	const result = await withBrowserRetry(() =>
 		runSession(config, (session) => {
 			return extractPageContent(session, url);
-		}),
+		}, { operation: "content" }),
 	);
 
 	if (!result) {

@@ -119,9 +119,13 @@ All errors are formatted as markdown documents with a `# Heading`, a description
 
 **Page errors (DNS, SSL, etc.):** The error includes the browser's error text. Report to the user and suggest checking the URL or network.
 
+**Busy browser profile:** Browser-backed commands (`verify`, `search`, and text/HTML `content`) take an atomic lock for the configured automation profile. If another web-search operation is active, the command fails fast with `# Web Search Busy`. Retry after about 60 seconds; do not run multiple browser-backed `web.js` commands in parallel.
+
 ## Concurrency
 
-Only **one search/content operation at a time**. The Playwright MCP Bridge extension supports a single active connection — starting a new session closes any existing one. Do not run multiple `web.js` commands in parallel.
+Only **one browser-backed operation at a time per automation profile**. The Playwright MCP Bridge extension supports a single active connection, so `web.js` uses a profile lock to prevent concurrent `verify`, `search`, and browser-backed `content` runs from racing. A `search --content` invocation holds one lock for the whole combined operation. Binary downloads handled by `content` do not open the browser and do not take the lock.
+
+If you see `# Web Search Busy`, retry the same command after about 60 seconds. Do not remove lock files manually unless you have confirmed the owner process is gone; stale locks from dead processes are cleaned automatically on the next run.
 
 ## Known Limitations
 

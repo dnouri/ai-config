@@ -3,6 +3,45 @@
  */
 
 /**
+ * Error thrown when another web-search process owns the browser profile lock.
+ */
+export class WebSearchBusyError extends Error {
+	constructor({
+		profileHash,
+		ownerPid,
+		ownerOperation,
+		ownerStartedAt,
+		requestedOperation,
+		metadataReadable = true,
+		lockDirExists = true,
+	} = {}) {
+		const lines = [
+			"Another web-search operation is already using this browser profile.",
+			"",
+			"Retry this command after about 60 seconds. Do not start multiple browser-backed `web.js` commands in parallel.",
+		];
+
+		if (profileHash) lines.push("", `**Profile:** \`${profileHash}\``);
+		if (ownerPid) lines.push(`**Owner PID:** \`${ownerPid}\``);
+		if (ownerOperation) lines.push(`**Owner operation:** \`${ownerOperation}\``);
+		if (ownerStartedAt) lines.push(`**Started:** \`${ownerStartedAt}\``);
+		if (requestedOperation) lines.push(`**Requested operation:** \`${requestedOperation}\``);
+		if (!metadataReadable && lockDirExists) {
+			lines.push("", "The lock metadata is not readable yet. Retry after about 60 seconds.");
+		}
+
+		super(lines.join("\n"));
+		this.name = "WebSearchBusyError";
+		this.code = "WEB_SEARCH_BUSY";
+		this.profileHash = profileHash;
+		this.ownerPid = ownerPid;
+		this.ownerOperation = ownerOperation;
+		this.ownerStartedAt = ownerStartedAt;
+		this.requestedOperation = requestedOperation;
+	}
+}
+
+/**
  * Error thrown when a search engine blocks or shows a captcha.
  */
 export class SearchError extends Error {
@@ -40,6 +79,8 @@ export function formatError(err, baseDir) {
 	if (err instanceof SearchError && err.category) {
 		const label = err.category === "captcha" ? "Captcha" : "Blocked";
 		lines.push(`# Search Error: ${label}`);
+	} else if (err instanceof WebSearchBusyError || err.code === "WEB_SEARCH_BUSY") {
+		lines.push("# Web Search Busy");
 	} else {
 		lines.push("# Error");
 	}
