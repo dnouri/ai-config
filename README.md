@@ -1,10 +1,10 @@
 # dnopi
 
-6 skills and 3 extensions for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+7 skills and 4 extensions for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
 ## Installation
 
-Install all 6 skills and 4 extensions:
+Install all 7 skills and 4 extensions:
 
 ```bash
 pi install npm:dnopi
@@ -46,6 +46,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 | [tmux](skills/tmux/SKILL.md) | Run long-running processes in tmux sessions |
 | [slack-latest](skills/slack-latest/SKILL.md) | Gather recent Slack messages, read threads, and send replies |
 | [improve-agent](skills/improve-agent/SKILL.md) | Analyze pi sessions to find recurring issues and improve agent workflow (pi-specific) |
+| [llm-cliche-check](skills/llm-cliche-check/SKILL.md) | Check and revise prose with Simon Willison's live LLM cliché highlighter |
 | [web-search](skills/web-search/SKILL.md) | Web search and content extraction via real browser with multi-engine fallback |
 
 ## Extensions (pi only)
@@ -64,6 +65,7 @@ Both tools also support project-level files (`./AGENTS.md` / `./CLAUDE.md`) that
 - **tmux**: [tmux](https://github.com/tmux/tmux)
 - **slack-latest**: Python 3 (standard library only); browser tokens from a Slack session
 - **improve-agent**: Python 3, [jq](https://jqlang.github.io/jq/) (for raw JSONL investigation); pi sessions only
+- **llm-cliche-check**: [Node.js](https://nodejs.org/), `playwright-cli`, a Chromium-compatible browser, and network access to Simon's tool
 - **web-search**: [Node.js](https://nodejs.org/), [`playwright-cli`](https://github.com/nicobailon/playwright-mcp), a Chromium-based browser — one-time [setup guide](skills/web-search/references/setup-browser.md)
 
 ## License
