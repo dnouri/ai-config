@@ -1,6 +1,6 @@
 ---
 name: tmux
-description: Use tmux instead of bash tool to run commands that take more than ~30 seconds, like bulk operations, db migrations, dev servers.
+description: Use tmux to run long-running commands like bulk operations, db migrations, dev servers, or to drive or debug interactive commands and TUIs.
 ---
 
 # tmux for Long-Running Processes
