@@ -1,11 +1,29 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
 import {
 	braveSearchUrl, ddgSearchUrl, googleSearchUrl, bingSearchUrl,
 	isCaptchaTitle, isDdgBlocked, isGoogleBlocked, isBingBlocked,
 	ENGINES, DEFAULT_ENGINE_ORDER,
 	formatResults, parseSearchArgs,
 } from "./search.js";
+
+// Execute the real browser expressions against an offline DOM. JSDOM does not
+// load external resources or run page scripts with these default options.
+function domSession(html, url = "https://www.google.com/search?q=test") {
+	const document = new JSDOM(html, { url }).window.document;
+	return {
+		pageTitle: () => document.title,
+		eval: expr => Function("document", `return (${expr})()`)(document),
+	};
+}
+
+function googleResultHtml(href, title = "Result", snippet = "A result snippet") {
+	return `<div class="tF2Cxc">
+		<a jsname="UWckNb" href="${href}"><h3>${title}</h3></a>
+		<div class="VwiC3b">${snippet}</div>
+	</div>`;
+}
 
 describe("braveSearchUrl", () => {
 	test("encodes query into Brave Search URL", () => {
@@ -83,6 +101,120 @@ describe("isBingBlocked", () => {
 	test("handles null/undefined", () => {
 		assert.ok(!isBingBlocked(null));
 		assert.ok(!isBingBlocked(undefined));
+	});
+});
+
+describe("Google result extraction", () => {
+	test("retains relative and absolute goto result links as unresolved redirects", () => {
+		// Minimal reconstruction of the 2026-10-02 saved result attributes and
+		// snapshot. Tokens are synthetic opaque values, not encoded destinations.
+		const session = domSession(
+			googleResultHtml(
+				"/goto?url=opaque-first",
+				"Your First Ten Hires Are AI Agents: The Solo Founder's ...",
+				"Aug 05, 2026. Your First Ten Hires Are AI Agents.",
+			) + googleResultHtml(
+				"https://www.google.com/goto?url=opaque-second&amp;ved=example",
+				"Software Engineer, Coding Agent Harness Engineering",
+				"Applications for this job will be accepted at least until September 19, 2026.",
+			),
+		);
+
+		assert.deepEqual(session.eval(ENGINES.google.extractExpr(10)), [
+			{
+				title: "Your First Ten Hires Are AI Agents: The Solo Founder's ...",
+				link: "https://www.google.com/goto?url=opaque-first",
+				snippet: "Aug 05, 2026. Your First Ten Hires Are AI Agents.",
+				needsResolution: true,
+			},
+			{
+				title: "Software Engineer, Coding Agent Harness Engineering",
+				link: "https://www.google.com/goto?url=opaque-second&ved=example",
+				snippet: "Applications for this job will be accepted at least until September 19, 2026.",
+				needsResolution: true,
+			},
+		]);
+	});
+
+	test("still rejects Google navigation, help and unsupported redirect routes", () => {
+		const links = [
+			"/search?q=test", "/webhp", "/preferences?hl=sv",
+			"https://support.google.com/websearch/answer/181196?hl=sv",
+			"https://accounts.google.com/ServiceLogin",
+			"https://policies.google.com/privacy?hl=sv",
+			"/goto", "/goto?url=", "/goto?url=%20", "/goto/other?url=opaque",
+			"https://support.google.com/goto?url=opaque",
+			"http://www.google.com/goto?url=opaque",
+		];
+		const session = domSession(links.map(link => googleResultHtml(link)).join(""));
+		assert.deepEqual(session.eval(ENGINES.google.extractExpr(20)), []);
+	});
+
+	test("preserves direct links and the yuRUbf anchor fallback", () => {
+		const session = domSession(`<div class="tF2Cxc">
+			<div class="yuRUbf"><a href="https://example.com/agents"><h3>Agent harness</h3></a></div>
+			<div class="VwiC3b"> A direct result </div>
+		</div>`);
+		assert.deepEqual(session.eval(ENGINES.google.extractExpr(10)), [
+			{ title: "Agent harness", link: "https://example.com/agents", snippet: "A direct result" },
+		]);
+	});
+
+	test("deduplicates result hrefs and applies the limit to accepted results", () => {
+		const redirect = googleResultHtml("/goto?url=opaque-first", "Redirect");
+		const session = domSession(
+			googleResultHtml("/search?q=test") + redirect + redirect +
+			googleResultHtml("https://example.com/agents", "Direct") +
+			googleResultHtml("/goto?url=opaque-second", "Second redirect"),
+		);
+		assert.deepEqual(session.eval(ENGINES.google.extractExpr(2)), [
+			{
+				title: "Redirect", link: "https://www.google.com/goto?url=opaque-first",
+				snippet: "A result snippet", needsResolution: true,
+			},
+			{ title: "Direct", link: "https://example.com/agents", snippet: "A result snippet" },
+		]);
+	});
+
+	test("skips non-HTTP, malformed and untitled results", () => {
+		const session = domSession(
+			["javascript:alert(1)", "mailto:test@example.com", "http://"]
+				.map(link => googleResultHtml(link)).join("") +
+			googleResultHtml("/goto?url=opaque-untitled", ""),
+		);
+		assert.deepEqual(session.eval(ENGINES.google.extractExpr(10)), []);
+	});
+});
+
+describe("Brave blocking detection", () => {
+	test("classifies the saved proof-of-work wall despite its normal title", () => {
+		// Heading, controls and help route from the 2026-10-02 saved snapshot.
+		const session = domSession(`<title>Brave Search</title><body>
+			<h1>Verifying you're not a bot</h1>
+			<p>Quick check before you continue searching.</p>
+			<button>Verify</button><button>Switch to traditional CAPTCHA</button>
+			<a href="/help/pow-captcha">Why am I seeing this?</a>
+		</body>`, "https://search.brave.com/search?q=test&source=web");
+		assert.deepEqual(ENGINES.brave.detectBlocking(session), {
+			category: "captcha", message: "Brave Search is requesting bot verification",
+		});
+	});
+
+	test("does not classify ordinary results mentioning bot verification as a wall", () => {
+		const session = domSession(`<title>bot verification - Brave Search</title>
+			<div data-type="web"><a href="https://example.com/captcha">
+				<span class="title">CAPTCHA help</span></a>
+				<p>What does Verifying you're not a bot mean? An article about CAPTCHA.</p>
+			</div>`, "https://search.brave.com/search?q=test&source=web");
+		assert.equal(ENGINES.brave.detectBlocking(session), null);
+	});
+
+	test("preserves title-based challenge classification", () => {
+		const session = domSession("<title>PoW Captcha - Brave Search</title>");
+		assert.deepEqual(ENGINES.brave.detectBlocking(session), {
+			category: "captcha",
+			message: 'Brave Search showed a captcha (page title: "PoW Captcha - Brave Search")',
+		});
 	});
 });
 
@@ -169,6 +301,23 @@ describe("isDdgBlocked", () => {
 });
 
 describe("formatResults", () => {
+	test("labels unresolved redirects without implying content verifies the destination", () => {
+		const output = formatResults([
+			{
+				title: "Redirect", link: "https://www.google.com/goto?url=opaque",
+				snippet: "Search snippet", needsResolution: true, content: "Extracted content",
+			},
+			{ title: "Direct", link: "https://example.com/agents", snippet: "Direct snippet" },
+		], { query: "agent harness", engine: "google" });
+		assert.equal(output, [
+			'# Search: "agent harness"', "", "Found 2 results via Google.", "",
+			"## 1. Redirect", "", "**URL:** https://www.google.com/goto?url=opaque",
+			"**Link status:** Search redirect; destination not yet resolved or verified.", "",
+			"Search snippet", "", "Extracted content", "",
+			"## 2. Direct", "", "**URL:** https://example.com/agents", "", "Direct snippet",
+		].join("\n"));
+	});
+
 	test("formats single result as markdown with heading and metadata", () => {
 		const output = formatResults(
 			[{ title: "Test Page", link: "https://example.com", snippet: "A test page" }],

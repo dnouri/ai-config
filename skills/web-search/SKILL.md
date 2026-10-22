@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: Web search, content extraction, and product image discovery via real browser. Searches with Google, Bing, DuckDuckGo, or Brave (auto-fallback). Extracts page content as markdown including image URLs. Handles SPAs, anti-bot detection, and logged-in sessions. Requires one-time browser setup.
+description: Web search. Use when you need internet search with full results, usually within a 'fast' subagent. Extracts page content as markdown. Handles SPAs, anti-bot detection, and logged-in sessions. Requires one-time browser setup.
 ---
 
 # Web Search
@@ -129,6 +129,12 @@ If you see `# Web Search Busy`, retry the same command after about 60 seconds. D
 
 ## Known Limitations
 
+### Google result redirects are discovery links, not verified destinations
+
+Google may serve result anchors as opaque `https://www.google.com/goto?url=...` links. Search retains these links and labels them **Search redirect; destination not yet resolved or verified** (`needsResolution: true` in the extraction result). Google navigation and help links remain excluded.
+
+Search preserves the token as-is. Without `--content`, it does not follow the redirect or fetch result pages. Do not infer a company URL from the token or the displayed breadcrumb. Resolve the link in an approved follow-up investigation and record the final destination before treating it as official-company evidence. `--content` may follow the redirect to extract page text, but it does not certify or report a verified destination URL.
+
 ### GitHub: use `gh` CLI instead
 
 GitHub pages beyond READMEs are JavaScript-rendered SPAs. Content extraction returns navigation chrome instead of content. Use the `gh` CLI:
@@ -168,6 +174,12 @@ If `--content` doesn't yield images (some SPAs strip them), try extracting from 
 ```
 
 **Tip:** `.webp` image URLs from retail sites work as-is — no conversion needed.
+
+## Offline Parser Checks
+
+From this skill directory, run `node --test search.test.js` to exercise the production extraction expressions and blocking detectors against local JSDOM fixtures. This does not attach to a browser or read the browser config.
+
+Do not run the whole test suite while a browser is reserved for manual use: `session.test.js` exercises resource cleanup and can reap real orphaned browser processes and daemon sessions.
 
 ## When to Use
 
