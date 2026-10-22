@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: Web search, content extraction, and product image discovery via real browser. Searches with Google, Bing, DuckDuckGo, or Brave (auto-fallback). Extracts page content as markdown including image URLs. Handles SPAs, anti-bot detection, and logged-in sessions. Requires one-time browser setup.
+description: Web search. Use when you need internet search with full results, usually within a 'fast' subagent. Extracts page content as markdown. Handles SPAs, anti-bot detection, and logged-in sessions. Requires one-time browser setup.
 ---
 
 # Web Search
