@@ -149,6 +149,14 @@ export function isCaptchaTitle(title) {
 	return lower.includes("captcha") || lower.includes("robot") || lower.includes("blocked");
 }
 
+/** Check Brave page body for its proof-of-work verification wall. */
+export function isBraveBlocked(bodyText) {
+	if (!bodyText) return false;
+	const lower = bodyText.toLowerCase();
+	return lower.includes("verifying you're not a bot") &&
+		lower.includes("switch to traditional captcha");
+}
+
 /** Check DDG page body for bot detection signals. */
 export function isDdgBlocked(bodyText) {
 	if (!bodyText) return false;
@@ -232,6 +240,10 @@ export const ENGINES = {
 			const title = session.pageTitle();
 			if (isCaptchaTitle(title)) {
 				return { category: "captcha", message: `Brave Search showed a captcha (page title: "${title}")` };
+			}
+			const bodyText = session.eval("() => document.body?.textContent?.substring(0, 1000)");
+			if (isBraveBlocked(bodyText)) {
+				return { category: "captcha", message: "Brave Search is requesting bot verification" };
 			}
 			return null;
 		},

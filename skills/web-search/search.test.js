@@ -186,6 +186,38 @@ describe("Google result extraction", () => {
 	});
 });
 
+describe("Brave blocking detection", () => {
+	test("classifies the saved proof-of-work wall despite its normal title", () => {
+		// Heading, controls and help route from the 2026-10-02 saved snapshot.
+		const session = domSession(`<title>Brave Search</title><body>
+			<h1>Verifying you're not a bot</h1>
+			<p>Quick check before you continue searching.</p>
+			<button>Verify</button><button>Switch to traditional CAPTCHA</button>
+			<a href="/help/pow-captcha">Why am I seeing this?</a>
+		</body>`, "https://search.brave.com/search?q=test&source=web");
+		assert.deepEqual(ENGINES.brave.detectBlocking(session), {
+			category: "captcha", message: "Brave Search is requesting bot verification",
+		});
+	});
+
+	test("does not classify ordinary results mentioning bot verification as a wall", () => {
+		const session = domSession(`<title>bot verification - Brave Search</title>
+			<div data-type="web"><a href="https://example.com/captcha">
+				<span class="title">CAPTCHA help</span></a>
+				<p>What does Verifying you're not a bot mean? An article about CAPTCHA.</p>
+			</div>`, "https://search.brave.com/search?q=test&source=web");
+		assert.equal(ENGINES.brave.detectBlocking(session), null);
+	});
+
+	test("preserves title-based challenge classification", () => {
+		const session = domSession("<title>PoW Captcha - Brave Search</title>");
+		assert.deepEqual(ENGINES.brave.detectBlocking(session), {
+			category: "captcha",
+			message: 'Brave Search showed a captcha (page title: "PoW Captcha - Brave Search")',
+		});
+	});
+});
+
 describe("ENGINES", () => {
 	test("has entries for all four engines", () => {
 		assert.ok(ENGINES.google);
