@@ -78,6 +78,8 @@ export function ddgExtractExpr(max) {
 
 /**
  * JavaScript expression to extract search results from Google DOM.
+ * Keeps opaque /goto result links with needsResolution: true; it does not
+ * decode their tokens or claim a verified destination.
  */
 export function googleExtractExpr(max) {
 	return `() => {
@@ -87,14 +89,22 @@ export function googleExtractExpr(max) {
 			if (results.length >= ${max}) break;
 			const a = el.querySelector('a[jsname="UWckNb"]') || el.querySelector('div.yuRUbf a[href]');
 			if (!a) continue;
-			const href = a.href || '';
-			if (!href.startsWith('http') || href.includes('google.com')) continue;
+			let url;
+			try { url = new URL(a.href); } catch { continue; }
+			if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+			const href = url.href;
+			const needsResolution = url.origin === 'https://www.google.com' &&
+				url.pathname === '/goto' && Boolean(url.searchParams.get('url')?.trim());
+			const isGoogle = url.hostname === 'google.com' || url.hostname.endsWith('.google.com');
+			if (isGoogle && !needsResolution) continue;
 			if (seen.has(href)) continue;
 			seen.add(href);
 			const title = el.querySelector('h3')?.textContent?.trim() || '';
 			if (!title) continue;
 			const snippet = el.querySelector('div.VwiC3b')?.textContent?.trim() || '';
-			results.push({ title, link: href, snippet });
+			const result = { title, link: href, snippet };
+			if (needsResolution) result.needsResolution = true;
+			results.push(result);
 		}
 		return results;
 	}`;
@@ -231,7 +241,7 @@ export const ENGINES = {
 /**
  * Format search results as a markdown document.
  *
- * @param {Array<{title: string, link: string, snippet: string, content?: string}>} results
+ * @param {Array<{title: string, link: string, snippet: string, needsResolution?: boolean, content?: string}>} results
  * @param {object} options
  * @param {string} options.query - The original search query
  * @param {string} options.engine - Engine ID that produced these results
@@ -251,6 +261,9 @@ export function formatResults(results, { query, engine }) {
 		lines.push(`## ${i + 1}. ${r.title}`);
 		lines.push("");
 		lines.push(`**URL:** ${r.link}`);
+		if (r.needsResolution) {
+			lines.push("**Link status:** Search redirect; destination not yet resolved or verified.");
+		}
 		lines.push("");
 		lines.push(r.snippet);
 		if (r.content) {
