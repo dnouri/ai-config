@@ -40,9 +40,9 @@ Use `subagent` for Cursor `Task` calls. Normally supply `task` and the role's `m
 These model and effort rules govern all delegated work, including pstack, other skills, and ad hoc tasks. Follow the selected workflow and role assignments, but use these rules instead of skill-specific model names, model-configuration paths, or budget adjustments. The role table below maps pstack roles; use the task-class guidance for other delegation.
 
 ```text
-fast: zai/glm-5.3-flash@max,openai-codex/gpt-6.1-sol@medium
-standard: openai-codex/gpt-6.1-sol@xhigh,zai/glm-5.3@max
-powerful: kimi-coding/k3-256k@max,openai-codex/gpt-6.1-sol@max,zai/glm-5.3@max
+fast: openrouter/deepseek/deepseek-v4.1-flash-1017@max,zai/glm-5.3-flash@max,openai-codex/gpt-6.1-sol@medium
+standard: openai-codex/gpt-6.1-sol@xhigh,zai/glm-5.3@max,openrouter/deepseek/deepseek-v4.1-flash-1017@max
+powerful: openai-codex/gpt-6.1-sol@max,zai/glm-5.3@max,kimi-coding/k3-256k@max
 ```
 
 Expand the tier name into its configured chain before passing it to `subagent` as `model`.
@@ -72,9 +72,9 @@ Give each child a self-contained brief with the goal, scope, constraints, source
 
 Use two participants by default for review and design panels, including `arena runners`, `architect runners`, and `interrogate reviewers`. An explicit participant count from the user or skill takes precedence. Fallback chains do not set panel size.
 
-Choose each seat's primary from powerful, using distinct model families before reusing a family. For each seat, put its chosen primary first, then the remaining powerful candidates in their configured order. Keep each candidate's effort suffix. Spawn one child per seat, not one child for the whole panel.
+Choose each seat's primary from powerful, using distinct model families before reusing a family. For each seat, put its chosen primary first, then the remaining powerful candidates in their configured order. Keep each candidate's effort suffix. Spawn one child per seat, not one child for the whole panel. A model's family is its maker, not its gateway: one maker reached through two gateways is still one family, and two makers behind one gateway are still two families.
 
-For a cross-judge pool, choose one powerful candidate, preferably from a different family than the parent's. Put that candidate first, then the remaining powerful candidates in their configured order. Spawn one judge, not the whole pool.
+For a cross-judge pool, choose one powerful candidate, preferably from a different family than the parent's. Put that candidate first, then the remaining powerful candidates in their configured order, moving the parent's family to the end while another distinct family remains. Spawn one judge, not the whole pool.
 
 Record the actual serving models. If fallbacks collapse a panel to one family, report the reduced independence.
 
