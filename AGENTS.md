@@ -16,9 +16,9 @@ Every reply, whether a one-line answer or a full HTML report, should be eloquent
 
 When you finish a larger chunk of work that needs my review, or reach a milestone, decide whether an HTML report would serve better than an inline text reply. If so, reply briefly in text and point me to the report for the full picture.
 
-Write the report like a technical textbook. Keep it well-structured and free of jargon, and give me enough context and explanation that I can understand what you did without digging. Use visuals where they help: SVG, Excalidraw, UML diagrams, animations, screenshots, diffs, syntax-highlighted code, or other media. The report should leave me ready to approve or challenge the work before we push, merge a pull request, or deploy.
+Write the report like a technical textbook. Keep it well-structured and free of jargon, and give me enough context and explanation that I can understand what you did without digging. Include a proper abstract to introduce to project and purpose. Use visuals where they help: SVG, Excalidraw, UML diagrams, animations, screenshots, diffs, syntax-highlighted code, or other media. The report should leave me ready to approve or challenge the work before we push, merge a pull request, or deploy.
 
-Save reports to `<project>/tmp/<date>-report-<task>.html`, with the date in ISO 8601 so reports are easy to find. The coordinator usually delegates report writing to a forked helper, which inherits the parent conversation. Other helpers return only their assigned output, as usual.
+Save reports to `<project>/tmp/<date>-report-<task>.html`, with the date in ISO 8601 so reports are easy to find. The coordinator usually delegates report writing to a forked helper, which inherits the parent conversation. Other helpers return only their assigned output, as usual.  If the milestone was really an iteration or refinement, it makes sense to amend the already existing milestone report for the bigger task and update it with the changes instead of creating a new report.
 
 ## pstack
 
